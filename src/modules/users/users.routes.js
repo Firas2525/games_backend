@@ -7,6 +7,7 @@ import {
   deduct,
   getTransactions,
   getMyTransactions,
+  getAllTransactionsHandler,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -21,6 +22,7 @@ router.get('/me/transactions', authenticate, getMyTransactions);
 // Admin-only routes
 router.use(authenticate, authorize(ROLES.ADMIN));
 
+router.get('/transactions/all', getAllTransactionsHandler);
 router.get('/', getUsers);
 router.get('/:id', getUser);
 router.patch('/:id/toggle-status', toggleStatus);

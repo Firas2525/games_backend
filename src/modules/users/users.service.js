@@ -95,3 +95,13 @@ export const getUserTransactions = async (userId) => {
     .populate('adminId', 'name email')
     .sort({ createdAt: -1 });
 };
+
+export const getAllTransactions = async (query = {}) => {
+  const filter = {};
+  if (query.type) filter.type = query.type;
+  return await Transaction.find(filter)
+    .populate('userId', 'name email avatar')
+    .populate('adminId', 'name email')
+    .sort({ createdAt: -1 });
+};
+

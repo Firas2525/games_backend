@@ -46,3 +46,9 @@ export const getMyTransactions = asyncHandler(async (req, res) => {
   const transactions = await usersService.getUserTransactions(req.user._id);
   return ApiResponse.success(res, transactions, 'My transactions retrieved successfully');
 });
+
+export const getAllTransactionsHandler = asyncHandler(async (req, res) => {
+  const transactions = await usersService.getAllTransactions(req.query);
+  return ApiResponse.success(res, transactions, 'All operations logs retrieved successfully');
+});
+
