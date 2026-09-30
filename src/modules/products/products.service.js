@@ -198,3 +198,106 @@ export const getUserProducts = async (query = {}) => {
     categories: Object.keys(grouped),
   };
 };
+
+// 7. Get Product Details (Auto1Card live query or SW Games category packages)
+export const getProductDetails = async (id) => {
+  const product = await Product.findById(id).lean();
+  if (!product) {
+    throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
+  }
+
+  // 1. If provider is Auto1Card
+  if (product.source === 'auto1card') {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+
+      const res = await fetch(
+        `https://api.auto1card.com/client/api/products?products_id=${product.externalId}`,
+        {
+          headers: {
+            'api-token':
+              process.env.AUTO1CARD_API_TOKEN ||
+              'vXxwuG4VVYkw9XGS7FCoOjshKTxr4-xV_Wfd7mPp4Sw-p_Q6h8T7hbxSeO11148N',
+            Cookie:
+              process.env.AUTO1CARD_COOKIE ||
+              'auto1card_v1=a5prjhmv2kpou405uj1bbua91b',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const json = await res.json();
+        const items = Array.isArray(json) ? json : [json];
+        const packages = items.map((pkg) => ({
+          id: pkg.id?.toString() || product.externalId,
+          name: pkg.name || product.name,
+          description: pkg.description || '',
+          price: typeof pkg.price === 'number' ? pkg.price : parseFloat(pkg.price || product.price),
+          currency: '$',
+          params: Array.isArray(pkg.params) ? pkg.params : ['ايدي اللاعب'],
+          categoryName: pkg.category_name || product.category,
+          available: pkg.available !== false,
+        }));
+
+        return {
+          product,
+          source: 'auto1card',
+          packages,
+        };
+      }
+    } catch (err) {
+      console.warn('Auto1Card live details fetch error, using stored:', err.message);
+    }
+
+    // Fallback to stored Auto1Card package
+    return {
+      product,
+      source: 'auto1card',
+      packages: [
+        {
+          id: product.externalId,
+          name: product.name,
+          description: product.category,
+          price: product.price,
+          currency: product.currency || '$',
+          params: product.requiredFields.map((f) => f.label || f.key),
+          categoryName: product.category,
+          available: product.isAvailable,
+        },
+      ],
+    };
+  }
+
+  // 2. If provider is SW Games (https://sw-games.net)
+  // Retrieve all packages for this game/category so user can scroll and choose with prices!
+  const sameCategoryProducts = await Product.find({
+    source: 'sw_games',
+    category: product.category,
+    isVisible: true,
+  }).lean();
+
+  const list = sameCategoryProducts.length > 0 ? sameCategoryProducts : [product];
+
+  const packages = list.map((pkg) => ({
+    id: pkg.externalId || pkg._id.toString(),
+    productId: pkg._id.toString(),
+    name: pkg.name,
+    description: pkg.note || pkg.category,
+    price: pkg.price,
+    currency: pkg.currency || '$',
+    params: pkg.requiredFields.map((f) => f.label || f.key),
+    categoryName: pkg.category,
+    available: pkg.isAvailable,
+  }));
+
+  return {
+    product,
+    source: 'sw_games',
+    packages,
+  };
+};

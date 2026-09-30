@@ -4,14 +4,16 @@ import {
   getAdminList,
   toggleVisibility,
   getUserList,
+  getDetails,
 } from './products.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
 
 const router = Router();
 
-// User / Public route
+// User / Public routes
 router.get('/', getUserList);
+router.get('/:id/details', getDetails);
 
 // Admin-only protected routes
 router.use(authenticate, authorize(ROLES.ADMIN));

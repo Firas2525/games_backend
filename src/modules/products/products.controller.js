@@ -22,3 +22,8 @@ export const getUserList = asyncHandler(async (req, res) => {
   const result = await productsService.getUserProducts(req.query);
   return ApiResponse.success(res, result, 'User products fetched successfully');
 });
+
+export const getDetails = asyncHandler(async (req, res) => {
+  const result = await productsService.getProductDetails(req.params.id);
+  return ApiResponse.success(res, result, 'Product details fetched successfully');
+});
