@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import authRoutes from './modules/auth/auth.routes.js';
 import gamesRoutes from './modules/games/games.routes.js';
 import usersRoutes from './modules/users/users.routes.js';
+import productsRoutes from './modules/products/products.routes.js';
 import { notFoundHandler, globalErrorHandler } from './middlewares/error.middleware.js';
 import { ApiResponse } from './utils/apiResponse.js';
 
@@ -27,6 +28,7 @@ app.get('/health', (req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/games', gamesRoutes);
 app.use('/api/v1/users', usersRoutes);
+app.use('/api/v1/products', productsRoutes);
 
 // Error handlers
 app.use(notFoundHandler);
