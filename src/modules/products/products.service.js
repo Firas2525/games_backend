@@ -70,14 +70,23 @@ export const syncAllProducts = async () => {
   const [swList, auto1List] = await Promise.all([fetchSwGames(), fetchAuto1Card()]);
   const allNormalized = [...swList, ...auto1List];
 
-  let syncedCount = 0;
-  for (const item of allNormalized) {
-    await Product.findOneAndUpdate(
-      { source: item.source, externalId: item.externalId },
-      {
+  if (allNormalized.length === 0) {
+    return {
+      totalSynced: 0,
+      swGamesCount: 0,
+      auto1CardCount: 0,
+    };
+  }
+
+  // High-performance batch upsert in one roundtrip
+  const operations = allNormalized.map((item) => ({
+    updateOne: {
+      filter: { source: item.source, externalId: item.externalId },
+      update: {
         $set: {
           name: item.name,
           category: item.category,
+          price: item.price,
           originalPrice: item.originalPrice,
           currency: item.currency,
           image: item.image,
@@ -90,13 +99,19 @@ export const syncAllProducts = async () => {
           isVisible: false, // Keep disabled by default until admin reviews
         },
       },
-      { upsert: true, new: true }
-    );
-    syncedCount++;
-  }
+      upsert: true,
+    },
+  }));
+
+  const bulkResult = await Product.bulkWrite(operations, { ordered: false });
+
+  const totalSynced =
+    (bulkResult.upsertedCount || 0) +
+    (bulkResult.modifiedCount || 0) +
+    (bulkResult.matchedCount || 0);
 
   return {
-    totalSynced: syncedCount,
+    totalSynced,
     swGamesCount: swList.length,
     auto1CardCount: auto1List.length,
   };
@@ -122,7 +137,11 @@ export const getAdminProducts = async (query = {}) => {
     ];
   }
 
-  const products = await Product.find(filter).sort({ category: 1, name: 1 });
+  // Exclude rawPayload to keep response lightweight (~60KB instead of 2.5MB)
+  const products = await Product.find(filter)
+    .select('-rawPayload')
+    .sort({ category: 1, name: 1 })
+    .lean();
 
   // Get distinct categories and sources for the admin filter chips
   const categories = await Product.distinct('category');
