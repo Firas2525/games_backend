@@ -60,3 +60,11 @@ export const loginUser = async ({ email, password }) => {
     token,
   };
 };
+
+export const adminLogin = async ({ email, password }) => {
+  const result = await loginUser({ email, password });
+  if (result.user.role !== 'admin') {
+    throw new ApiError('Access denied: Administrator privileges required', HTTP_STATUS.FORBIDDEN);
+  }
+  return result;
+};
