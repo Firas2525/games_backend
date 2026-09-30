@@ -91,6 +91,9 @@ export const syncAllProducts = async () => {
           currency: item.currency,
           image: item.image,
           isAvailable: item.isAvailable,
+          minCount: item.minCount,
+          maxCount: item.maxCount,
+          qtyValues: item.qtyValues,
           requiredFields: item.requiredFields,
           sourceName: item.sourceName,
           rawPayload: item.rawPayload,
@@ -242,6 +245,11 @@ export const getProductDetails = async (id) => {
           params: Array.isArray(pkg.params) ? pkg.params : ['ايدي اللاعب'],
           categoryName: pkg.category_name || product.category,
           available: pkg.available !== false,
+          minCount: pkg.min_count || pkg.minCount ? parseInt(pkg.min_count || pkg.minCount) : (product.minCount || 1),
+          maxCount: pkg.max_count || pkg.maxCount ? parseInt(pkg.max_count || pkg.maxCount) : (product.maxCount || null),
+          qtyValues: Array.isArray(pkg.qty_values)
+            ? pkg.qty_values.map(Number).filter((v) => !isNaN(v))
+            : (product.qtyValues || null),
         }));
 
         return {
@@ -268,6 +276,9 @@ export const getProductDetails = async (id) => {
           params: product.requiredFields.map((f) => f.label || f.key),
           categoryName: product.category,
           available: product.isAvailable,
+          minCount: product.minCount || 1,
+          maxCount: product.maxCount || null,
+          qtyValues: product.qtyValues || null,
         },
       ],
     };
@@ -283,17 +294,35 @@ export const getProductDetails = async (id) => {
 
   const list = sameCategoryProducts.length > 0 ? sameCategoryProducts : [product];
 
-  const packages = list.map((pkg) => ({
-    id: pkg.externalId || pkg._id.toString(),
-    productId: pkg._id.toString(),
-    name: pkg.name,
-    description: pkg.note || pkg.category,
-    price: pkg.price,
-    currency: pkg.currency || '$',
-    params: pkg.requiredFields.map((f) => f.label || f.key),
-    categoryName: pkg.category,
-    available: pkg.isAvailable,
-  }));
+  const packages = list.map((pkg) => {
+    const raw = pkg.rawPayload || {};
+    const minCount = pkg.minCount || (raw.minCount ? parseInt(raw.minCount) : 1);
+    const maxCount =
+      pkg.maxCount !== undefined && pkg.maxCount !== null
+        ? pkg.maxCount
+        : raw.maxCount
+        ? parseInt(raw.maxCount)
+        : null;
+    const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
+    const qtyValues = Array.isArray(rawQtyValues)
+      ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
+      : null;
+
+    return {
+      id: pkg.externalId || pkg._id.toString(),
+      productId: pkg._id.toString(),
+      name: pkg.name,
+      description: pkg.note || pkg.category,
+      price: pkg.price,
+      currency: pkg.currency || '$',
+      params: (pkg.requiredFields || []).map((f) => f.label || f.key),
+      categoryName: pkg.category,
+      available: pkg.isAvailable,
+      minCount,
+      maxCount,
+      qtyValues: qtyValues && qtyValues.length > 0 ? qtyValues : null,
+    };
+  });
 
   return {
     product,

@@ -66,6 +66,18 @@ const productSchema = new mongoose.Schema(
       default: false, // Default is hidden until Admin enables it
       index: true,
     },
+    minCount: {
+      type: Number,
+      default: 1,
+    },
+    maxCount: {
+      type: Number,
+      default: null,
+    },
+    qtyValues: {
+      type: [Number],
+      default: null,
+    },
     requiredFields: [requiredFieldSchema],
     rawPayload: {
       type: mongoose.Schema.Types.Mixed,
