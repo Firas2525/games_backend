@@ -191,10 +191,18 @@ export const toggleProductVisibility = async (id) => {
 
 // 5.1 Admin: Update Main Category manually (Override)
 export const updateProductMainCategory = async (id, mainCategory) => {
-  const allowed = ['games', 'apps', 'social', 'cards'];
+  const allowed = [
+    'games',
+    'apps',
+    'social',
+    'subscriptions',
+    'numbers',
+    'cards',
+    'payment',
+  ];
   if (!allowed.includes(mainCategory)) {
     throw new ApiError(
-      'Invalid mainCategory. Allowed values: games, apps, social, cards',
+      `Invalid mainCategory. Allowed values: ${allowed.join(', ')}`,
       HTTP_STATUS.BAD_REQUEST
     );
   }
