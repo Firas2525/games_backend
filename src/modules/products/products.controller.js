@@ -18,6 +18,14 @@ export const toggleVisibility = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, product, statusMsg);
 });
 
+export const updateCategory = asyncHandler(async (req, res) => {
+  const product = await productsService.updateProductMainCategory(
+    req.params.id,
+    req.body.mainCategory
+  );
+  return ApiResponse.success(res, product, 'تم تحديث التصنيف الرئيسي للمنتج بنجاح');
+});
+
 export const getUserList = asyncHandler(async (req, res) => {
   const result = await productsService.getUserProducts(req.query);
   return ApiResponse.success(res, result, 'User products fetched successfully');

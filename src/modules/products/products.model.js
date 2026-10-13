@@ -40,6 +40,12 @@ const productSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    mainCategory: {
+      type: String,
+      enum: ['games', 'apps', 'social', 'cards'],
+      default: 'games',
+      index: true,
+    },
     originalPrice: {
       type: Number,
       required: true,

@@ -1,3 +1,5 @@
+import { detectMainCategory } from '../utils/categorizer.js';
+
 export const normalizeAuto1CardProduct = (item) => {
   const minCount = item.min_count || item.minCount ? parseInt(item.min_count || item.minCount) : 1;
   const maxCount = item.max_count || item.maxCount ? parseInt(item.max_count || item.maxCount) : null;
@@ -26,13 +28,17 @@ export const normalizeAuto1CardProduct = (item) => {
 
   const rawPrice = item.price !== undefined && item.price !== null ? String(item.price) : '0';
   const priceNum = parseFloat(rawPrice) || 0;
+  const name = item.name || 'بدون اسم';
+  const category = item.category_name || item.description || 'بطاقات متنوعة';
+  const mainCategory = detectMainCategory(name, category);
 
   return {
     externalId: String(item.id),
     source: 'auto1card',
     sourceName: 'Auto 1 Card',
-    name: item.name || 'بدون اسم',
-    category: item.category_name || item.description || 'بطاقات متنوعة',
+    name,
+    category,
+    mainCategory,
     price: priceNum,
     originalPrice: priceNum,
     currency: '$',

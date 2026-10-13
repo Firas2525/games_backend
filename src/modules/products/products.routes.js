@@ -3,6 +3,7 @@ import {
   sync,
   getAdminList,
   toggleVisibility,
+  updateCategory,
   getUserList,
   getDetails,
 } from './products.controller.js';
@@ -21,5 +22,6 @@ router.use(authenticate, authorize(ROLES.ADMIN));
 router.post('/sync', sync);
 router.get('/admin', getAdminList);
 router.patch('/:id/toggle-visibility', toggleVisibility);
+router.patch('/:id/category', updateCategory);
 
 export default router;

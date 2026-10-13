@@ -1,3 +1,5 @@
+import { detectMainCategory } from '../utils/categorizer.js';
+
 export const normalizeSwGamesProduct = (item) => {
   const minCount = item.minCount ? parseInt(item.minCount) : 1;
   const maxCount = item.maxCount ? parseInt(item.maxCount) : null;
@@ -27,13 +29,17 @@ export const normalizeSwGamesProduct = (item) => {
 
   const rawPrice = item.price !== undefined && item.price !== null ? String(item.price) : '0';
   const priceNum = parseFloat(rawPrice) || 0;
+  const name = item.name || 'بدون اسم';
+  const category = item.gameName || 'ألعاب SW';
+  const mainCategory = detectMainCategory(name, category);
 
   return {
     externalId: String(item.id),
     source: 'sw_games',
     sourceName: 'SW Games',
-    name: item.name || 'بدون اسم',
-    category: item.gameName || 'ألعاب SW',
+    name,
+    category,
+    mainCategory,
     price: priceNum,
     originalPrice: priceNum,
     currency: item.currency || '$',

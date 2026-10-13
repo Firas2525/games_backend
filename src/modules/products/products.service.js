@@ -1,6 +1,7 @@
 import { Product } from './products.model.js';
 import { normalizeSwGamesProduct } from './adapters/swGames.adapter.js';
 import { normalizeAuto1CardProduct } from './adapters/auto1card.adapter.js';
+import { detectMainCategory } from './utils/categorizer.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
@@ -86,6 +87,7 @@ export const syncAllProducts = async () => {
         $set: {
           name: item.name,
           category: item.category,
+          mainCategory: item.mainCategory,
           price: item.price,
           originalPrice: item.originalPrice,
           currency: item.currency,
@@ -108,6 +110,20 @@ export const syncAllProducts = async () => {
 
   const bulkResult = await Product.bulkWrite(operations, { ordered: false });
 
+  // Auto-backfill any unclassified products currently in DB
+  const unclassified = await Product.find({
+    $or: [{ mainCategory: { $exists: false } }, { mainCategory: null }],
+  }).lean();
+  if (unclassified.length > 0) {
+    const backfillOps = unclassified.map((p) => ({
+      updateOne: {
+        filter: { _id: p._id },
+        update: { $set: { mainCategory: detectMainCategory(p.name, p.category) } },
+      },
+    }));
+    await Product.bulkWrite(backfillOps, { ordered: false });
+  }
+
   const totalSynced =
     (bulkResult.upsertedCount || 0) +
     (bulkResult.modifiedCount || 0) +
@@ -129,6 +145,9 @@ export const getAdminProducts = async (query = {}) => {
   }
   if (query.category && query.category !== 'all') {
     filter.category = query.category;
+  }
+  if (query.mainCategory && query.mainCategory !== 'all') {
+    filter.mainCategory = query.mainCategory;
   }
   if (query.isVisible !== undefined && query.isVisible !== 'all') {
     filter.isVisible = query.isVisible === 'true';
@@ -170,12 +189,35 @@ export const toggleProductVisibility = async (id) => {
   return product;
 };
 
+// 5.1 Admin: Update Main Category manually (Override)
+export const updateProductMainCategory = async (id, mainCategory) => {
+  const allowed = ['games', 'apps', 'social', 'cards'];
+  if (!allowed.includes(mainCategory)) {
+    throw new ApiError(
+      'Invalid mainCategory. Allowed values: games, apps, social, cards',
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  const product = await Product.findById(id);
+  if (!product) {
+    throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
+  }
+
+  product.mainCategory = mainCategory;
+  await product.save();
+  return product;
+};
+
 // 6. User: Get visible products grouped by Category
 export const getUserProducts = async (query = {}) => {
   const filter = { isVisible: true, isAvailable: true };
 
   if (query.category && query.category !== 'all') {
     filter.category = query.category;
+  }
+  if (query.mainCategory && query.mainCategory !== 'all') {
+    filter.mainCategory = query.mainCategory;
   }
   if (query.search) {
     filter.$or = [
