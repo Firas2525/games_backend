@@ -1,6 +1,50 @@
 import { detectMainCategory } from '../utils/categorizer.js';
 
-export const normalizeSwGamesProduct = (item) => {
+export const normalizeSwGamesImage = (item = {}) => {
+  const outerKeys = [
+    'image',
+    'gameImage',
+    'game_image',
+    'gameImg',
+    'game_img',
+    'categoryImage',
+    'category_image',
+    'categoryImg',
+    'category_img',
+    'appImage',
+    'app_image',
+    'cover',
+    'coverImage',
+    'cover_image',
+    'banner',
+    'icon',
+    'logo',
+  ];
+
+  let rawImg = '';
+  for (const k of outerKeys) {
+    if (item[k] && typeof item[k] === 'string' && item[k].trim()) {
+      rawImg = item[k].trim();
+      break;
+    }
+  }
+
+  if (!rawImg) return '';
+
+  rawImg = rawImg.replace(/\\\/g, '/');
+  if (rawImg.startsWith('http://127.0.0.1:8000')) {
+    return rawImg.replace('http://127.0.0.1:8000', 'https://sw-games.net');
+  }
+  if (rawImg.startsWith('https://127.0.0.1:8000')) {
+    return rawImg.replace('https://127.0.0.1:8000', 'https://sw-games.net');
+  }
+  if (rawImg.startsWith('/')) {
+    return `https://sw-games.net${rawImg}`;
+  }
+  return rawImg;
+};
+
+export const normalizeSwGamesProduct = (item, sourceName = 'SW Games') => {
   const minCount = item.minCount ? parseInt(item.minCount) : 1;
   const maxCount = item.maxCount ? parseInt(item.maxCount) : null;
   const rawQtyValues = item.qty_values || item.qtyValues || null;
@@ -32,18 +76,19 @@ export const normalizeSwGamesProduct = (item) => {
   const name = item.name || 'بدون اسم';
   const category = item.gameName || 'ألعاب SW';
   const mainCategory = detectMainCategory(name, category);
+  const image = normalizeSwGamesImage(item);
 
   return {
     externalId: String(item.id),
     source: 'sw_games',
-    sourceName: 'SW Games',
+    sourceName,
     name,
     category,
     mainCategory,
     price: priceNum,
     originalPrice: priceNum,
     currency: item.currency || '$',
-    image: item.image || '',
+    image,
     isAvailable: item.isActive === 1,
     minCount,
     maxCount,

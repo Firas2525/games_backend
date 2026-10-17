@@ -2,51 +2,98 @@ import { Product } from './products.model.js';
 import { normalizeSwGamesProduct } from './adapters/swGames.adapter.js';
 import { normalizeAuto1CardProduct } from './adapters/auto1card.adapter.js';
 import { normalizeBrand1CardProduct } from './adapters/brand1card.adapter.js';
-import { detectMainCategory } from './utils/categorizer.js';
+import { detectMainCategory, cleanName } from './utils/categorizer.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
-// 1. Fetch from SW Games API
-export const fetchSwGames = async () => {
+const BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// 1. Fetch from SW Games USD Account (Roya USD)
+export const fetchSwGamesUsd = async () => {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    const token =
+      process.env.SW_GAMES_TOKEN || 'i1zz8ajhxca9419asucqcmj6z6';
 
     const res = await fetch('https://sw-games.net/api/fastapi/products', {
       headers: {
-        ApiToken: 'i1zz8ajhxca9419asucqcmj6z6',
+        apiToken: token,
         Accept: 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+        'User-Agent': BROWSER_USER_AGENT,
       },
       signal: controller.signal,
     });
     clearTimeout(timeout);
 
     if (!res.ok) {
-      console.warn(`SW Games API returned status ${res.status}`);
+      console.warn(`SW Games USD API returned status ${res.status}`);
       return [];
     }
 
     const data = await res.json();
     const items = data?.data?.products || [];
-    return items.map(normalizeSwGamesProduct);
+    return items.map((item) => normalizeSwGamesProduct(item, 'SW Games USD'));
   } catch (error) {
-    console.error('SW Games fetch error:', error.message);
+    console.error('SW Games USD fetch error:', error.message);
     return [];
   }
 };
 
-// 2. Fetch from Auto 1 Card API
+// 1.1 Fetch from SW Games SYP Account (Roya SYP - Syrian Telecom & Bills)
+export const fetchSwGamesSyp = async () => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    const token =
+      process.env.SW_GAMES_SYP_TOKEN || 'yzhm54xr2dh6778klm34c5y21';
+
+    const res = await fetch('https://sw-games.net/api/fastapi/products', {
+      headers: {
+        apiToken: token,
+        Accept: 'application/json',
+        'User-Agent': BROWSER_USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      console.warn(`SW Games SYP API returned status ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json();
+    const items = data?.data?.products || [];
+    return items.map((item) => {
+      const normalized = normalizeSwGamesProduct(item, 'SW Games SYP');
+      normalized.currency = 'ل.س';
+      return normalized;
+    });
+  } catch (error) {
+    console.error('SW Games SYP fetch error:', error.message);
+    return [];
+  }
+};
+
+// 2. Fetch from Auto 1 Card API (https://api.auto1card.com/)
 export const fetchAuto1Card = async () => {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
 
+    const token =
+      process.env.AUTO1CARD_API_TOKEN ||
+      'vXxwuG4VVYkw9XGS7FCoOjshKTxr4-xV_Wfd7mPp4Sw-p_Q6h8T7hbxSeO11148N';
+
     const res = await fetch('https://api.auto1card.com/client/api/products', {
       headers: {
-        'api-token': 'vXxwuG4VVYkw9XGS7FCoOjshKTxr4-xV_Wfd7mPp4Sw-p_Q6h8T7hbxSeO11148N',
+        'api-token': token,
         Cookie: 'auto1card_v1=a5prjhmv2kpou405uj1bbua91b',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+        'User-Agent': BROWSER_USER_AGENT,
         Accept: 'application/json',
       },
       signal: controller.signal,
@@ -67,7 +114,7 @@ export const fetchAuto1Card = async () => {
   }
 };
 
-// 2.1 Fetch from Brand 1 Card API (https://api.brand1-card.com/)
+// 3. Fetch from Brand 1 Card / Syria Card API (https://api.brand1-card.com/)
 export const fetchBrand1Card = async () => {
   try {
     const controller = new AbortController();
@@ -80,12 +127,21 @@ export const fetchBrand1Card = async () => {
     const res = await fetch('https://api.brand1-card.com/client/api/products', {
       headers: {
         'api-token': token,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+        'User-Agent': BROWSER_USER_AGENT,
         Accept: 'application/json',
       },
       signal: controller.signal,
     });
     clearTimeout(timeout);
+
+    if (res.status === 401) {
+      const errJson = await res.json().catch(() => null);
+      console.warn(
+        'Brand 1 Card 401 Unauthorized. Server IP might need whitelisting in Brand1Card dashboard:',
+        errJson?.msg || errJson || '401'
+      );
+      return [];
+    }
 
     if (!res.ok) {
       console.warn(`Brand 1 Card API returned status ${res.status}`);
@@ -94,11 +150,11 @@ export const fetchBrand1Card = async () => {
 
     const json = await res.json();
     if (json && json.status === 'ERROR') {
-      console.error('Brand 1 Card API Error:', json.msg || json);
+      console.warn('Brand 1 Card API message:', json.msg || json);
       return [];
     }
 
-    const items = Array.isArray(json) ? json : json.data || [];
+    const items = Array.isArray(json) ? json : json?.data || [];
     return items.map(normalizeBrand1CardProduct);
   } catch (error) {
     console.error('Brand 1 Card fetch error:', error.message);
@@ -106,56 +162,76 @@ export const fetchBrand1Card = async () => {
   }
 };
 
-// 3. Sync from all providers into MongoDB
+// 4. Sync from all providers into MongoDB (preserving Admin Manual Overrides)
 export const syncAllProducts = async () => {
-  const [swList, auto1List, brand1List] = await Promise.all([
-    fetchSwGames(),
+  const [swUsdList, swSypList, auto1List, brand1List] = await Promise.all([
+    fetchSwGamesUsd(),
+    fetchSwGamesSyp(),
     fetchAuto1Card(),
     fetchBrand1Card(),
   ]);
-  const allNormalized = [...swList, ...auto1List, ...brand1List];
+
+  const allNormalized = [...swUsdList, ...swSypList, ...auto1List, ...brand1List];
 
   if (allNormalized.length === 0) {
     return {
       totalSynced: 0,
-      swGamesCount: 0,
+      swGamesUsdCount: 0,
+      swGamesSypCount: 0,
       auto1CardCount: 0,
       brand1CardCount: 0,
     };
   }
 
-  // High-performance batch upsert in one roundtrip
-  const operations = allNormalized.map((item) => ({
-    updateOne: {
-      filter: { source: item.source, externalId: item.externalId },
-      update: {
-        $set: {
-          name: item.name,
-          category: item.category,
-          mainCategory: item.mainCategory,
-          price: item.price,
-          originalPrice: item.originalPrice,
-          currency: item.currency,
-          image: item.image,
-          isAvailable: item.isAvailable,
-          minCount: item.minCount,
-          maxCount: item.maxCount,
-          qtyValues: item.qtyValues,
-          requiredFields: item.requiredFields,
-          sourceName: item.sourceName,
-          rawPayload: item.rawPayload,
+  // Load existing overridden products so their mainCategory is NOT overwritten
+  const overridden = await Product.find({ isCategoryOverridden: true })
+    .select('source externalId')
+    .lean();
+  const overriddenSet = new Set(overridden.map((p) => `${p.source}:${p.externalId}`));
+
+  // Batch operations
+  const operations = allNormalized.map((item) => {
+    const isOverridden = overriddenSet.has(`${item.source}:${item.externalId}`);
+    const updateDoc = {
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      originalPrice: item.originalPrice,
+      currency: item.currency,
+      image: item.image,
+      isAvailable: item.isAvailable,
+      minCount: item.minCount,
+      maxCount: item.maxCount,
+      qtyValues: item.qtyValues,
+      requiredFields: item.requiredFields,
+      sourceName: item.sourceName,
+      rawPayload: item.rawPayload,
+    };
+
+    // Only update mainCategory if admin has not manually overridden it
+    if (!isOverridden) {
+      updateDoc.mainCategory = item.mainCategory;
+    }
+
+    return {
+      updateOne: {
+        filter: { source: item.source, externalId: item.externalId },
+        update: {
+          $set: updateDoc,
+          $setOnInsert: {
+            isVisible: false, // Keep disabled by default until admin reviews
+            isCategoryOverridden: false,
+            ...(isOverridden ? {} : { mainCategory: item.mainCategory }),
+          },
         },
-        $setOnInsert: {
-          isVisible: false, // Keep disabled by default until admin reviews
-        },
+        upsert: true,
       },
-      upsert: true,
-    },
-  }));
+    };
+  });
 
   const bulkResult = await Product.bulkWrite(operations, { ordered: false });
 
-  // Auto-backfill any unclassified products currently in DB
+  // Auto-backfill any unclassified products currently in DB without category
   const unclassified = await Product.find({
     $or: [{ mainCategory: { $exists: false } }, { mainCategory: null }],
   }).lean();
@@ -176,13 +252,14 @@ export const syncAllProducts = async () => {
 
   return {
     totalSynced,
-    swGamesCount: swList.length,
+    swGamesUsdCount: swUsdList.length,
+    swGamesSypCount: swSypList.length,
     auto1CardCount: auto1List.length,
     brand1CardCount: brand1List.length,
   };
 };
 
-// 4. Admin: Get all normalized products with filters
+// 5. Admin: Get all normalized products with filters
 export const getAdminProducts = async (query = {}) => {
   const filter = {};
 
@@ -205,13 +282,11 @@ export const getAdminProducts = async (query = {}) => {
     ];
   }
 
-  // Exclude rawPayload to keep response lightweight (~60KB instead of 2.5MB)
   const products = await Product.find(filter)
     .select('-rawPayload')
     .sort({ category: 1, name: 1 })
     .lean();
 
-  // Get distinct categories and sources for the admin filter chips
   const categories = await Product.distinct('category');
   const sources = await Product.distinct('sourceName');
 
@@ -223,7 +298,7 @@ export const getAdminProducts = async (query = {}) => {
   };
 };
 
-// 5. Admin: Toggle visibility in User App
+// 6. Admin: Toggle visibility in User App
 export const toggleProductVisibility = async (id) => {
   const product = await Product.findById(id);
   if (!product) {
@@ -235,7 +310,7 @@ export const toggleProductVisibility = async (id) => {
   return product;
 };
 
-// 5.1 Admin: Update Main Category manually (Override)
+// 7. Admin: Update Main Category manually (Sets isCategoryOverridden = true)
 export const updateProductMainCategory = async (id, mainCategory) => {
   const allowed = [
     'games',
@@ -259,11 +334,42 @@ export const updateProductMainCategory = async (id, mainCategory) => {
   }
 
   product.mainCategory = mainCategory;
+  product.isCategoryOverridden = true;
   await product.save();
   return product;
 };
 
-// 6. User: Get visible products grouped by Category
+// 7.1 Admin: Bulk update category for all items in a group
+export const updateCategoryGroup = async (categoryName, mainCategory) => {
+  const allowed = [
+    'games',
+    'apps',
+    'social',
+    'subscriptions',
+    'numbers',
+    'cards',
+    'payment',
+  ];
+  if (!allowed.includes(mainCategory)) {
+    throw new ApiError(
+      `Invalid mainCategory. Allowed values: ${allowed.join(', ')}`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  const result = await Product.updateMany(
+    { category: categoryName },
+    { $set: { mainCategory, isCategoryOverridden: true } }
+  );
+
+  return {
+    category: categoryName,
+    mainCategory,
+    modifiedCount: result.modifiedCount,
+  };
+};
+
+// 8. User: Get visible products grouped by Category
 export const getUserProducts = async (query = {}) => {
   const filter = { isVisible: true, isAvailable: true };
 
@@ -298,89 +404,77 @@ export const getUserProducts = async (query = {}) => {
   };
 };
 
-// 7. Get Product Details (Auto1Card live query or SW Games category packages)
+// 9. Get Product Details (Packages & Pricing modeled after legacy site)
 export const getProductDetails = async (id) => {
   const product = await Product.findById(id).lean();
   if (!product) {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
   }
 
-  // 1. If provider is Auto1Card
-  if (product.source === 'auto1card') {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
+  // 1. If provider is SW Games (Roya)
+  // Retrieve all packages for this game/category with clean package names and prices
+  if (product.source === 'sw_games') {
+    const categoryQuery = {
+      source: 'sw_games',
+      category: product.category,
+    };
 
-      const res = await fetch(
-        `https://api.auto1card.com/client/api/products?products_id=${product.externalId}`,
-        {
-          headers: {
-            'api-token':
-              process.env.AUTO1CARD_API_TOKEN ||
-              'vXxwuG4VVYkw9XGS7FCoOjshKTxr4-xV_Wfd7mPp4Sw-p_Q6h8T7hbxSeO11148N',
-            Cookie:
-              process.env.AUTO1CARD_COOKIE ||
-              'auto1card_v1=a5prjhmv2kpou405uj1bbua91b',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
-            Accept: 'application/json',
-          },
-          signal: controller.signal,
-        }
-      );
-      clearTimeout(timeout);
+    // If the category has multiple packages in DB, retrieve all of them
+    const allCategoryProducts = await Product.find(categoryQuery)
+      .sort({ price: 1, name: 1 })
+      .lean();
 
-      if (res.ok) {
-        const json = await res.json();
-        const items = Array.isArray(json) ? json : [json];
-        const packages = items.map((pkg) => ({
-          id: pkg.id?.toString() || product.externalId,
-          name: pkg.name || product.name,
-          description: pkg.description || '',
-          price: typeof pkg.price === 'number' ? pkg.price : parseFloat(pkg.price || product.price),
-          currency: '$',
-          params: Array.isArray(pkg.params) ? pkg.params : ['ايدي اللاعب'],
-          categoryName: pkg.category_name || product.category,
-          available: pkg.available !== false,
-          minCount: pkg.min_count || pkg.minCount ? parseInt(pkg.min_count || pkg.minCount) : (product.minCount || 1),
-          maxCount: pkg.max_count || pkg.maxCount ? parseInt(pkg.max_count || pkg.maxCount) : (product.maxCount || null),
-          qtyValues: Array.isArray(pkg.qty_values)
-            ? pkg.qty_values.map(Number).filter((v) => !isNaN(v))
-            : (product.qtyValues || null),
-        }));
+    const list = allCategoryProducts.length > 0 ? allCategoryProducts : [product];
 
-        return {
-          product,
-          source: 'auto1card',
-          packages,
-        };
+    const packages = list.map((pkg) => {
+      const raw = pkg.rawPayload || {};
+      const minCount = pkg.minCount || (raw.minCount ? parseInt(raw.minCount) : 1);
+      const maxCount =
+        pkg.maxCount !== undefined && pkg.maxCount !== null
+          ? pkg.maxCount
+          : raw.maxCount
+          ? parseInt(raw.maxCount)
+          : null;
+      const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
+      const qtyValues = Array.isArray(rawQtyValues)
+        ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
+        : null;
+
+      // Clean package title like the legacy clean_name / package_label
+      let packageTitle = cleanName(pkg.name);
+      const categoryLower = (pkg.category || '').toLowerCase();
+      if (categoryLower && packageTitle.toLowerCase().includes(categoryLower)) {
+        packageTitle =
+          packageTitle.replace(new RegExp(pkg.category, 'gi'), '').trim() ||
+          cleanName(pkg.name);
       }
-    } catch (err) {
-      console.warn('Auto1Card live details fetch error, using stored:', err.message);
-    }
 
-    // Fallback to stored Auto1Card package
+      return {
+        id: pkg.externalId || pkg._id.toString(),
+        productId: pkg._id.toString(),
+        name: packageTitle || pkg.name,
+        fullName: pkg.name,
+        description: pkg.category,
+        price: pkg.price,
+        originalPrice: pkg.originalPrice || pkg.price,
+        currency: pkg.currency || '$',
+        params: (pkg.requiredFields || []).map((f) => f.label || f.key || 'ايدي اللاعب'),
+        categoryName: pkg.category,
+        available: pkg.isAvailable,
+        minCount,
+        maxCount,
+        qtyValues: qtyValues && qtyValues.length > 0 ? qtyValues : null,
+      };
+    });
+
     return {
       product,
-      source: 'auto1card',
-      packages: [
-        {
-          id: product.externalId,
-          name: product.name,
-          description: product.category,
-          price: product.price,
-          currency: product.currency || '$',
-          params: product.requiredFields.map((f) => f.label || f.key),
-          categoryName: product.category,
-          available: product.isAvailable,
-          minCount: product.minCount || 1,
-          maxCount: product.maxCount || null,
-          qtyValues: product.qtyValues || null,
-        },
-      ],
+      source: 'sw_games',
+      packages,
     };
   }
 
-  // 1.1 If provider is Brand 1 Card (https://api.brand1-card.com/)
+  // 2. If provider is Brand 1 Card
   if (product.source === 'brand1card') {
     try {
       const controller = new AbortController();
@@ -395,7 +489,7 @@ export const getProductDetails = async (id) => {
         {
           headers: {
             'api-token': token,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+            'User-Agent': BROWSER_USER_AGENT,
             Accept: 'application/json',
           },
           signal: controller.signal,
@@ -407,8 +501,10 @@ export const getProductDetails = async (id) => {
         const json = await res.json();
         const items = Array.isArray(json) ? json : json?.data ? json.data : [json];
         const packages = items.map((pkg) => {
-          let minCount = pkg.min_count || pkg.minCount ? parseInt(pkg.min_count || pkg.minCount) : (product.minCount || 1);
-          let maxCount = pkg.max_count || pkg.maxCount ? parseInt(pkg.max_count || pkg.maxCount) : (product.maxCount || null);
+          let minCount =
+            pkg.min_count || pkg.minCount ? parseInt(pkg.min_count || pkg.minCount) : product.minCount || 1;
+          let maxCount =
+            pkg.max_count || pkg.maxCount ? parseInt(pkg.max_count || pkg.maxCount) : product.maxCount || null;
           let qtyValues = product.qtyValues || null;
 
           if (pkg.qty_values && typeof pkg.qty_values === 'object' && !Array.isArray(pkg.qty_values)) {
@@ -420,11 +516,14 @@ export const getProductDetails = async (id) => {
 
           return {
             id: pkg.id?.toString() || product.externalId,
-            name: pkg.name || product.name,
-            description: pkg.description || '',
+            productId: product._id.toString(),
+            name: cleanName(pkg.name || product.name),
+            fullName: pkg.name || product.name,
+            description: pkg.description || product.category,
             price: typeof pkg.price === 'number' ? pkg.price : parseFloat(pkg.price || product.price),
+            originalPrice: product.originalPrice,
             currency: '$',
-            params: Array.isArray(pkg.params) ? pkg.params : ['ايدي اللاعب'],
+            params: Array.isArray(pkg.params) && pkg.params.length > 0 ? pkg.params : ['ايدي اللاعب'],
             categoryName: pkg.category_name || product.category,
             available: pkg.available !== false,
             minCount,
@@ -442,72 +541,29 @@ export const getProductDetails = async (id) => {
     } catch (err) {
       console.warn('Brand1Card live details fetch error, using stored:', err.message);
     }
-
-    // Fallback to stored Brand1Card package
-    return {
-      product,
-      source: 'brand1card',
-      packages: [
-        {
-          id: product.externalId,
-          name: product.name,
-          description: product.category,
-          price: product.price,
-          currency: product.currency || '$',
-          params: product.requiredFields.map((f) => f.label || f.key),
-          categoryName: product.category,
-          available: product.isAvailable,
-          minCount: product.minCount || 1,
-          maxCount: product.maxCount || null,
-          qtyValues: product.qtyValues || null,
-        },
-      ],
-    };
   }
 
-  // 2. If provider is SW Games (https://sw-games.net)
-  // Retrieve all packages for this game/category so user can scroll and choose with prices!
-  const sameCategoryProducts = await Product.find({
-    source: 'sw_games',
-    category: product.category,
-    isVisible: true,
-  }).lean();
-
-  const list = sameCategoryProducts.length > 0 ? sameCategoryProducts : [product];
-
-  const packages = list.map((pkg) => {
-    const raw = pkg.rawPayload || {};
-    const minCount = pkg.minCount || (raw.minCount ? parseInt(raw.minCount) : 1);
-    const maxCount =
-      pkg.maxCount !== undefined && pkg.maxCount !== null
-        ? pkg.maxCount
-        : raw.maxCount
-        ? parseInt(raw.maxCount)
-        : null;
-    const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
-    const qtyValues = Array.isArray(rawQtyValues)
-      ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
-      : null;
-
-    return {
-      id: pkg.externalId || pkg._id.toString(),
-      productId: pkg._id.toString(),
-      name: pkg.name,
-      description: pkg.note || pkg.category,
-      price: pkg.price,
-      currency: pkg.currency || '$',
-      params: (pkg.requiredFields || []).map((f) => f.label || f.key),
-      categoryName: pkg.category,
-      available: pkg.isAvailable,
-      minCount,
-      maxCount,
-      qtyValues: qtyValues && qtyValues.length > 0 ? qtyValues : null,
-    };
-  });
-
+  // 3. Fallback for stored products (Auto1Card / Custom / Single)
   return {
     product,
-    source: 'sw_games',
-    packages,
+    source: product.source,
+    packages: [
+      {
+        id: product.externalId,
+        productId: product._id.toString(),
+        name: cleanName(product.name),
+        fullName: product.name,
+        description: product.category,
+        price: product.price,
+        originalPrice: product.originalPrice,
+        currency: product.currency || '$',
+        params: product.requiredFields.map((f) => f.label || f.key || 'ايدي اللاعب'),
+        categoryName: product.category,
+        available: product.isAvailable,
+        minCount: product.minCount || 1,
+        maxCount: product.maxCount || null,
+        qtyValues: product.qtyValues || null,
+      },
+    ],
   };
 };

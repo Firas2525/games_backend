@@ -26,6 +26,14 @@ export const updateCategory = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, product, 'تم تحديث التصنيف الرئيسي للمنتج بنجاح');
 });
 
+export const updateCategoryGroup = asyncHandler(async (req, res) => {
+  const result = await productsService.updateCategoryGroup(
+    req.body.category,
+    req.body.mainCategory
+  );
+  return ApiResponse.success(res, result, 'تم تحديث تصنيف جميع منتجات هذه الفئة بنجاح');
+});
+
 export const getUserList = asyncHandler(async (req, res) => {
   const result = await productsService.getUserProducts(req.query);
   return ApiResponse.success(res, result, 'User products fetched successfully');

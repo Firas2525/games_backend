@@ -46,6 +46,11 @@ const productSchema = new mongoose.Schema(
       default: 'games',
       index: true,
     },
+    isCategoryOverridden: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     originalPrice: {
       type: Number,
       required: true,

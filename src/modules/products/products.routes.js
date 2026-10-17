@@ -21,6 +21,7 @@ router.use(authenticate, authorize(ROLES.ADMIN));
 
 router.post('/sync', sync);
 router.get('/admin', getAdminList);
+router.patch('/category-group', updateCategoryGroup);
 router.patch('/:id/toggle-visibility', toggleVisibility);
 router.patch('/:id/category', updateCategory);
 
