@@ -1,6 +1,7 @@
 import { Product } from './products.model.js';
 import { normalizeSwGamesProduct } from './adapters/swGames.adapter.js';
 import { normalizeAuto1CardProduct } from './adapters/auto1card.adapter.js';
+import { normalizeBrand1CardProduct } from './adapters/brand1card.adapter.js';
 import { detectMainCategory } from './utils/categorizer.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
@@ -66,16 +67,60 @@ export const fetchAuto1Card = async () => {
   }
 };
 
+// 2.1 Fetch from Brand 1 Card API (https://api.brand1-card.com/)
+export const fetchBrand1Card = async () => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+
+    const token =
+      process.env.BRAND1CARD_API_TOKEN ||
+      'dc3df6e4e0da815834622859f6142e336cf1c553a627d213';
+
+    const res = await fetch('https://api.brand1-card.com/client/api/products', {
+      headers: {
+        'api-token': token,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      console.warn(`Brand 1 Card API returned status ${res.status}`);
+      return [];
+    }
+
+    const json = await res.json();
+    if (json && json.status === 'ERROR') {
+      console.error('Brand 1 Card API Error:', json.msg || json);
+      return [];
+    }
+
+    const items = Array.isArray(json) ? json : json.data || [];
+    return items.map(normalizeBrand1CardProduct);
+  } catch (error) {
+    console.error('Brand 1 Card fetch error:', error.message);
+    return [];
+  }
+};
+
 // 3. Sync from all providers into MongoDB
 export const syncAllProducts = async () => {
-  const [swList, auto1List] = await Promise.all([fetchSwGames(), fetchAuto1Card()]);
-  const allNormalized = [...swList, ...auto1List];
+  const [swList, auto1List, brand1List] = await Promise.all([
+    fetchSwGames(),
+    fetchAuto1Card(),
+    fetchBrand1Card(),
+  ]);
+  const allNormalized = [...swList, ...auto1List, ...brand1List];
 
   if (allNormalized.length === 0) {
     return {
       totalSynced: 0,
       swGamesCount: 0,
       auto1CardCount: 0,
+      brand1CardCount: 0,
     };
   }
 
@@ -133,6 +178,7 @@ export const syncAllProducts = async () => {
     totalSynced,
     swGamesCount: swList.length,
     auto1CardCount: auto1List.length,
+    brand1CardCount: brand1List.length,
   };
 };
 
@@ -316,6 +362,91 @@ export const getProductDetails = async (id) => {
     return {
       product,
       source: 'auto1card',
+      packages: [
+        {
+          id: product.externalId,
+          name: product.name,
+          description: product.category,
+          price: product.price,
+          currency: product.currency || '$',
+          params: product.requiredFields.map((f) => f.label || f.key),
+          categoryName: product.category,
+          available: product.isAvailable,
+          minCount: product.minCount || 1,
+          maxCount: product.maxCount || null,
+          qtyValues: product.qtyValues || null,
+        },
+      ],
+    };
+  }
+
+  // 1.1 If provider is Brand 1 Card (https://api.brand1-card.com/)
+  if (product.source === 'brand1card') {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+
+      const token =
+        process.env.BRAND1CARD_API_TOKEN ||
+        'dc3df6e4e0da815834622859f6142e336cf1c553a627d213';
+
+      const res = await fetch(
+        `https://api.brand1-card.com/client/api/products?products_id=${product.externalId}`,
+        {
+          headers: {
+            'api-token': token,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) GamesHub/1.0',
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeout);
+
+      if (res.ok) {
+        const json = await res.json();
+        const items = Array.isArray(json) ? json : json?.data ? json.data : [json];
+        const packages = items.map((pkg) => {
+          let minCount = pkg.min_count || pkg.minCount ? parseInt(pkg.min_count || pkg.minCount) : (product.minCount || 1);
+          let maxCount = pkg.max_count || pkg.maxCount ? parseInt(pkg.max_count || pkg.maxCount) : (product.maxCount || null);
+          let qtyValues = product.qtyValues || null;
+
+          if (pkg.qty_values && typeof pkg.qty_values === 'object' && !Array.isArray(pkg.qty_values)) {
+            minCount = pkg.qty_values.min ? parseInt(pkg.qty_values.min) : minCount;
+            maxCount = pkg.qty_values.max ? parseInt(pkg.qty_values.max) : maxCount;
+          } else if (Array.isArray(pkg.qty_values)) {
+            qtyValues = pkg.qty_values.map(Number).filter((v) => !isNaN(v));
+          }
+
+          return {
+            id: pkg.id?.toString() || product.externalId,
+            name: pkg.name || product.name,
+            description: pkg.description || '',
+            price: typeof pkg.price === 'number' ? pkg.price : parseFloat(pkg.price || product.price),
+            currency: '$',
+            params: Array.isArray(pkg.params) ? pkg.params : ['ايدي اللاعب'],
+            categoryName: pkg.category_name || product.category,
+            available: pkg.available !== false,
+            minCount,
+            maxCount,
+            qtyValues,
+          };
+        });
+
+        return {
+          product,
+          source: 'brand1card',
+          packages,
+        };
+      }
+    } catch (err) {
+      console.warn('Brand1Card live details fetch error, using stored:', err.message);
+    }
+
+    // Fallback to stored Brand1Card package
+    return {
+      product,
+      source: 'brand1card',
       packages: [
         {
           id: product.externalId,

@@ -21,7 +21,7 @@ const productSchema = new mongoose.Schema(
     source: {
       type: String,
       required: true,
-      enum: ['sw_games', 'auto1card', 'custom'],
+      enum: ['sw_games', 'auto1card', 'brand1card', 'custom'],
       index: true,
     },
     sourceName: {
