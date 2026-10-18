@@ -34,8 +34,8 @@ export const normalizeAuto1CardProduct = (item) => {
 
   return {
     externalId: String(item.id),
-    source: 'auto1card',
-    sourceName: 'Auto 1 Card',
+    source: 'syria_card',
+    sourceName: 'سيريا كارد',
     name,
     category,
     mainCategory,

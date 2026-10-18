@@ -60,8 +60,8 @@ export const normalizeBrand1CardProduct = (item) => {
 
   return {
     externalId: String(item.id),
-    source: 'brand1card',
-    sourceName: 'Brand 1 Card',
+    source: 'syria_card',
+    sourceName: 'سيريا كارد',
     name,
     category,
     mainCategory,

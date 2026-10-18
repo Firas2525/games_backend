@@ -44,7 +44,11 @@ export const normalizeSwGamesImage = (item = {}) => {
   return rawImg;
 };
 
-export const normalizeSwGamesProduct = (item, sourceName = 'SW Games') => {
+export const normalizeSwGamesProduct = (
+  item,
+  sourceKey = 'roya_usd',
+  sourceName = 'رؤيا دولار'
+) => {
   const minCount = item.minCount ? parseInt(item.minCount) : 1;
   const maxCount = item.maxCount ? parseInt(item.maxCount) : null;
   const rawQtyValues = item.qty_values || item.qtyValues || null;
@@ -74,13 +78,13 @@ export const normalizeSwGamesProduct = (item, sourceName = 'SW Games') => {
   const rawPrice = item.price !== undefined && item.price !== null ? String(item.price) : '0';
   const priceNum = parseFloat(rawPrice) || 0;
   const name = item.name || 'بدون اسم';
-  const category = item.gameName || 'ألعاب SW';
+  const category = item.gameName || 'ألعاب رؤيا';
   const mainCategory = detectMainCategory(name, category);
   const image = normalizeSwGamesImage(item);
 
   return {
     externalId: String(item.id),
-    source: 'sw_games',
+    source: sourceKey,
     sourceName,
     name,
     category,

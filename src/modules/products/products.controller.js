@@ -7,6 +7,11 @@ export const sync = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'Products synced successfully from providers');
 });
 
+export const triggerSync = asyncHandler(async (req, res) => {
+  const result = await productsService.syncAllProducts();
+  return ApiResponse.success(res, result, 'Products catalog synchronized and classified successfully');
+});
+
 export const getAdminList = asyncHandler(async (req, res) => {
   const result = await productsService.getAdminProducts(req.query);
   return ApiResponse.success(res, result, 'Admin products fetched successfully');

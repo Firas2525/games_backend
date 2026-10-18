@@ -1,10 +1,14 @@
 import app from './app.js';
 import { connectDB } from './config/db.js';
 import { ENV } from './config/env.js';
+import { autoSyncOnStartup } from './modules/products/products.service.js';
 
 const startServer = async () => {
   // Connect to Database
   await connectDB();
+
+  // Run catalog synchronization & categorization on startup
+  autoSyncOnStartup();
 
   // Listen on PORT (Render sets process.env.PORT automatically)
   const server = app.listen(ENV.PORT, () => {

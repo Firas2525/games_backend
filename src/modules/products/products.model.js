@@ -21,7 +21,7 @@ const productSchema = new mongoose.Schema(
     source: {
       type: String,
       required: true,
-      enum: ['sw_games', 'auto1card', 'brand1card', 'custom'],
+      enum: ['roya_usd', 'roya_syp', 'syria_card', 'sw_games', 'auto1card', 'brand1card', 'custom'],
       index: true,
     },
     sourceName: {
@@ -74,7 +74,7 @@ const productSchema = new mongoose.Schema(
     },
     isVisible: {
       type: Boolean,
-      default: false, // Default is hidden until Admin enables it
+      default: true,
       index: true,
     },
     minCount: {

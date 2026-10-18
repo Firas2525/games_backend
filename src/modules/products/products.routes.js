@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import {
   sync,
+  triggerSync,
   getAdminList,
   toggleVisibility,
   updateCategory,
+  updateCategoryGroup,
   getUserList,
   getDetails,
 } from './products.controller.js';
@@ -14,6 +16,8 @@ const router = Router();
 
 // User / Public routes
 router.get('/', getUserList);
+router.get('/sync-now', triggerSync);
+router.post('/sync-now', triggerSync);
 router.get('/:id/details', getDetails);
 
 // Admin-only protected routes
