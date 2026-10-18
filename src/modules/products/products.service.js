@@ -171,6 +171,14 @@ export const syncAllProducts = async () => {
       { source: 'sw_games' },
       { $set: { source: 'roya_usd', sourceName: 'رؤيا دولار' } }
     );
+    await Product.updateMany(
+      { source: { $in: ['auto1card', 'brand1card'] } },
+      { $set: { source: 'syria_card', sourceName: 'سيريا كارد' } }
+    );
+    await Product.updateMany(
+      { isVisible: false },
+      { $set: { isVisible: true } }
+    );
   } catch (e) {
     console.warn('Legacy source migration note:', e.message);
   }
