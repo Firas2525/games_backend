@@ -6,10 +6,11 @@ const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: [true, 'Name is required'],
       trim: true,
-      minlength: [2, 'Name must be at least 2 characters'],
       maxlength: [50, 'Name must not exceed 50 characters'],
+      default: function () {
+        return this.email ? this.email.split('@')[0] : 'User';
+      },
     },
     email: {
       type: String,
@@ -18,6 +19,11 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
+    },
+    phone: {
+      type: String,
+      default: '',
+      trim: true,
     },
     password: {
       type: String,
@@ -29,6 +35,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ALL_ROLES,
       default: ROLES.USER,
+    },
+    currency: {
+      type: String,
+      enum: ['USD', 'SYP'],
+      default: 'USD',
+      immutable: true, // Currency cannot be changed after account creation
     },
     avatar: {
       type: String,

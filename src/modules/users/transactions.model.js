@@ -18,6 +18,11 @@ const transactionSchema = new mongoose.Schema(
       enum: ['deposit', 'deduction'],
       required: true,
     },
+    currency: {
+      type: String,
+      enum: ['USD', 'SYP'],
+      default: 'USD',
+    },
     amount: {
       type: Number,
       required: true,

@@ -16,16 +16,21 @@ const generateToken = (user) => {
   );
 };
 
-export const registerUser = async ({ name, email, password, role }) => {
+export const registerUser = async ({ name, email, phone, password, currency, role }) => {
   const existingUser = await User.findOne({ email });
   if (existingUser) {
     throw new ApiError('Email is already registered', HTTP_STATUS.CONFLICT);
   }
 
+  const normalizedCurrency = currency === 'SYP' ? 'SYP' : 'USD';
+  const resolvedName = (name && name.trim().length > 0) ? name.trim() : email.split('@')[0];
+
   const user = await User.create({
-    name,
-    email,
+    name: resolvedName,
+    email: email.trim().toLowerCase(),
+    phone: phone ? phone.trim() : '',
     password,
+    currency: normalizedCurrency,
     role: role || 'user',
   });
 

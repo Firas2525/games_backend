@@ -42,8 +42,8 @@ const productSchema = new mongoose.Schema(
     },
     mainCategory: {
       type: String,
-      enum: ['games', 'apps', 'social', 'subscriptions', 'numbers', 'cards', 'payment'],
       default: 'games',
+      trim: true,
       index: true,
     },
     isCategoryOverridden: {

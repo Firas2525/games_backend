@@ -1,4 +1,5 @@
 import { Product } from './products.model.js';
+import { Category } from './categories.model.js';
 import { normalizeSwGamesProduct } from './adapters/swGames.adapter.js';
 import { normalizeAuto1CardProduct } from './adapters/auto1card.adapter.js';
 import { normalizeBrand1CardProduct } from './adapters/brand1card.adapter.js';
@@ -331,6 +332,57 @@ export const getAdminProducts = async (query = {}) => {
   };
 };
 
+// 4.1 Live Verified Catalog Statistics
+export const getCatalogStats = async () => {
+  const [totalProducts, activeProducts, categoryAggregation, sourceAggregation] = await Promise.all([
+    Product.countDocuments(),
+    Product.countDocuments({ isVisible: true }),
+    Product.aggregate([
+      { $group: { _id: '$mainCategory', count: { $sum: 1 } } },
+    ]),
+    Product.aggregate([
+      { $group: { _id: '$source', count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const categories = {
+    games: 0,
+    apps: 0,
+    social: 0,
+    subscriptions: 0,
+    numbers: 0,
+    cards: 0,
+    payment: 0,
+  };
+  for (const item of categoryAggregation) {
+    if (item._id) categories[item._id] = item.count;
+  }
+
+  const sources = {
+    roya_usd: 0,
+    roya_syp: 0,
+    syria_card: 0,
+  };
+  for (const item of sourceAggregation) {
+    if (item._id) {
+      if (item._id === 'roya_usd' || item._id === 'sw_games') {
+        sources.roya_usd = (sources.roya_usd || 0) + item.count;
+      } else if (item._id === 'roya_syp') {
+        sources.roya_syp = (sources.roya_syp || 0) + item.count;
+      } else {
+        sources.syria_card = (sources.syria_card || 0) + item.count;
+      }
+    }
+  }
+
+  return {
+    totalProducts,
+    activeProducts,
+    categories,
+    sources,
+  };
+};
+
 // 5. Admin: Toggle visibility in User App
 export const toggleProductVisibility = async (id) => {
   const product = await Product.findById(id);
@@ -343,22 +395,187 @@ export const toggleProductVisibility = async (id) => {
   return product;
 };
 
+export const DEFAULT_MAIN_CATEGORIES = [
+  {
+    key: 'games',
+    title: 'ألعاب إلكترونية وشحن ألعاب',
+    subtitle: 'ببجي، فري فاير، كول أوف ديوتي، روبلوكس وكافة شحنات الألعاب',
+    icon: 'sports_esports_rounded',
+    color: '#6366F1',
+    sortOrder: 1,
+    isCustom: false,
+  },
+  {
+    key: 'apps',
+    title: 'تطبيقات وبث مباشر',
+    subtitle: 'شات، عملات تيك توك، لايكي، بيجو لايف وتطبيقات المحادثة',
+    icon: 'forum_rounded',
+    color: '#10B981',
+    sortOrder: 2,
+    isCustom: false,
+  },
+  {
+    key: 'social',
+    title: 'خدمات سوشل ميديا',
+    subtitle: 'متابعين، لايكات، مشاهدات إنستغرام، تيك توك وتويتر فورياً',
+    icon: 'share_rounded',
+    color: '#EC4899',
+    sortOrder: 3,
+    isCustom: false,
+  },
+  {
+    key: 'subscriptions',
+    title: 'اشتراكات وباقات VIP',
+    subtitle: 'نتفلكس، شاهد VIP، يوتيوب بريميوم، سبوتيفاي وباقات الترفيه',
+    icon: 'subscriptions_rounded',
+    color: '#E11D48',
+    sortOrder: 4,
+    isCustom: false,
+  },
+  {
+    key: 'cards',
+    title: 'بطاقات وقسائم رقمية',
+    subtitle: 'بطاقات جوجل بلاي، آيتونز، بلايستيشن، رايزر جولد وإكس بوكس',
+    icon: 'credit_card_rounded',
+    color: '#F59E0B',
+    sortOrder: 5,
+    isCustom: false,
+  },
+  {
+    key: 'numbers',
+    title: 'أرقام تفعيل دولية',
+    subtitle: 'أرقام وهمية لجميع دول العالم لتفعيل واتساب وتليجرام',
+    icon: 'dialpad_rounded',
+    color: '#0284C7',
+    sortOrder: 6,
+    isCustom: false,
+  },
+  {
+    key: 'payment',
+    title: 'دفع إلكتروني ومحافظ',
+    subtitle: 'شحن بنوك رقمية، بايير، بينانس، بيرفكت موني ومحافظ كاش',
+    icon: 'account_balance_wallet_rounded',
+    color: '#8B5CF6',
+    sortOrder: 7,
+    isCustom: false,
+  },
+];
+
+// Helper: Ensure default 7 categories exist in DB
+export const ensureDefaultCategories = async () => {
+  const count = await Category.countDocuments();
+  if (count === 0) {
+    await Category.insertMany(DEFAULT_MAIN_CATEGORIES);
+  }
+};
+
+// 6.0 Get all categories with product counts
+export const getAllCategories = async () => {
+  await ensureDefaultCategories();
+  const categories = await Category.find({ isVisible: true }).sort({ sortOrder: 1, createdAt: 1 });
+
+  // Count active products for each category
+  const productCounts = await Product.aggregate([
+    { $match: { isAvailable: { $ne: false }, isVisible: { $ne: false } } },
+    { $group: { _id: '$mainCategory', count: { $sum: 1 } } },
+  ]);
+
+  const countMap = {};
+  for (const pc of productCounts) {
+    countMap[pc._id] = pc.count;
+  }
+
+  return categories.map((cat) => ({
+    id: cat._id.toString(),
+    key: cat.key,
+    title: cat.title,
+    subtitle: cat.subtitle,
+    icon: cat.icon,
+    color: cat.color,
+    imageUrl: cat.imageUrl || '',
+    sortOrder: cat.sortOrder,
+    isCustom: cat.isCustom,
+    productCount: countMap[cat.key] || 0,
+  }));
+};
+
+// 6.01 Admin: Create new main category
+export const createCategory = async (data) => {
+  let { key, title, subtitle, icon, color, imageUrl } = data;
+  if (!title || !title.trim()) {
+    throw new ApiError('عنوان القسم مطلوب', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  if (!key || !key.trim()) {
+    // Generate key from title or timestamp
+    key = 'cat_' + Date.now().toString(36);
+  } else {
+    key = key.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  }
+
+  const existing = await Category.findOne({ key });
+  if (existing) {
+    throw new ApiError('مفتاح القسم موجود مسبقاً، يرجى اختيار اسم أو رمز آخر', HTTP_STATUS.CONFLICT);
+  }
+
+  const category = await Category.create({
+    key,
+    title: title.trim(),
+    subtitle: subtitle?.trim() || '',
+    icon: icon?.trim() || 'category_rounded',
+    color: color?.trim() || '#6366F1',
+    imageUrl: imageUrl?.trim() || '',
+    sortOrder: Date.now() % 1000,
+    isCustom: true,
+    isVisible: true,
+  });
+
+  return category;
+};
+
+// 6.015 Admin: Update existing category (title, image, icon, color, etc.)
+export const updateCategory = async (id, data) => {
+  const category = await Category.findById(id);
+  if (!category) {
+    throw new ApiError('القسم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+  const { title, subtitle, icon, color, imageUrl, isVisible, sortOrder } = data;
+  if (title !== undefined) category.title = title.trim();
+  if (subtitle !== undefined) category.subtitle = subtitle.trim();
+  if (icon !== undefined) category.icon = icon.trim();
+  if (color !== undefined) category.color = color.trim();
+  if (imageUrl !== undefined) category.imageUrl = imageUrl.trim();
+  if (isVisible !== undefined) category.isVisible = isVisible;
+  if (sortOrder !== undefined) category.sortOrder = Number(sortOrder) || 0;
+
+  await category.save();
+  return category;
+};
+
+// 6.02 Admin: Delete a custom category
+export const deleteCategory = async (id) => {
+  const category = await Category.findById(id);
+  if (!category) {
+    throw new ApiError('القسم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+  if (!category.isCustom) {
+    throw new ApiError('لا يمكن حذف الأقسام الأساسية للنظام', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  // Reassign any products in this category to 'games'
+  await Product.updateMany(
+    { mainCategory: category.key },
+    { $set: { mainCategory: 'games', isCategoryOverridden: true } }
+  );
+
+  await category.deleteOne();
+  return { message: 'تم حذف القسم بنجاح وإعادة تعيين المنتجات التابعة له', id };
+};
+
 // 6. Admin: Update Main Category manually (Sets isCategoryOverridden = true)
 export const updateProductMainCategory = async (id, mainCategory) => {
-  const allowed = [
-    'games',
-    'apps',
-    'social',
-    'subscriptions',
-    'numbers',
-    'cards',
-    'payment',
-  ];
-  if (!allowed.includes(mainCategory)) {
-    throw new ApiError(
-      `Invalid mainCategory. Allowed values: ${allowed.join(', ')}`,
-      HTTP_STATUS.BAD_REQUEST
-    );
+  if (!mainCategory || !mainCategory.trim()) {
+    throw new ApiError('التصنيف الرئيسي مطلوب', HTTP_STATUS.BAD_REQUEST);
   }
 
   const product = await Product.findById(id);
@@ -366,38 +583,46 @@ export const updateProductMainCategory = async (id, mainCategory) => {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
   }
 
-  product.mainCategory = mainCategory;
+  product.mainCategory = mainCategory.trim();
   product.isCategoryOverridden = true;
   await product.save();
   return product;
 };
 
-// 6.1 Admin: Bulk update category for all items in a group
+// 6.1 Admin: Bulk update category for selected items (Batch Move)
+export const bulkUpdateProductsCategory = async (productIds, mainCategory) => {
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    throw new ApiError('يجب تحديد عنصر واحد على الأقل لنقله', HTTP_STATUS.BAD_REQUEST);
+  }
+  if (!mainCategory || !mainCategory.trim()) {
+    throw new ApiError('يجب اختيار القسم الهدف', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const result = await Product.updateMany(
+    { _id: { $in: productIds } },
+    { $set: { mainCategory: mainCategory.trim(), isCategoryOverridden: true } }
+  );
+
+  return {
+    modifiedCount: result.modifiedCount,
+    mainCategory: mainCategory.trim(),
+  };
+};
+
+// 6.2 Admin: Bulk update category for all items in a group
 export const updateCategoryGroup = async (categoryName, mainCategory) => {
-  const allowed = [
-    'games',
-    'apps',
-    'social',
-    'subscriptions',
-    'numbers',
-    'cards',
-    'payment',
-  ];
-  if (!allowed.includes(mainCategory)) {
-    throw new ApiError(
-      `Invalid mainCategory. Allowed values: ${allowed.join(', ')}`,
-      HTTP_STATUS.BAD_REQUEST
-    );
+  if (!mainCategory || !mainCategory.trim()) {
+    throw new ApiError('التصنيف الرئيسي مطلوب', HTTP_STATUS.BAD_REQUEST);
   }
 
   const result = await Product.updateMany(
     { category: categoryName },
-    { $set: { mainCategory, isCategoryOverridden: true } }
+    { $set: { mainCategory: mainCategory.trim(), isCategoryOverridden: true } }
   );
 
   return {
     category: categoryName,
-    mainCategory,
+    mainCategory: mainCategory.trim(),
     modifiedCount: result.modifiedCount,
   };
 };
