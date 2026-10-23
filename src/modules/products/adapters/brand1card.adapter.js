@@ -27,13 +27,24 @@ export const normalizeBrand1CardProduct = (item) => {
     maxCount = parseInt(item.max_count || item.maxCount);
   }
 
-  const requiredFields = (item.params || []).map((paramName, idx) => ({
-    name: `field_${idx}`,
-    label: paramName || 'المعرف / الايدي',
-    type: 'text',
-    placeholder: `يرجى إدخال ${paramName}`,
-    required: true,
-  }));
+  let requiredFields = [];
+  if (Array.isArray(item.params_info) && item.params_info.length > 0) {
+    requiredFields = item.params_info.map((info) => ({
+      name: info.key || 'playerId',
+      label: info.label || info.key || 'ايدي اللاعب (Player ID)',
+      type: 'text',
+      placeholder: `يرجى إدخال ${info.label || info.key || 'المعرف'}`,
+      required: info.required !== false,
+    }));
+  } else if (Array.isArray(item.params) && item.params.length > 0) {
+    requiredFields = item.params.map((paramName, idx) => ({
+      name: `field_${idx}`,
+      label: paramName || 'المعرف / الايدي',
+      type: 'text',
+      placeholder: `يرجى إدخال ${paramName}`,
+      required: true,
+    }));
+  }
 
   if (requiredFields.length === 0) {
     requiredFields.push({

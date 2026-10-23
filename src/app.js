@@ -25,6 +25,17 @@ app.get('/health', (req, res) => {
   return ApiResponse.success(res, { status: 'healthy', timestamp: new Date() }, 'API is up and running');
 });
 
+// Outgoing IP diagnostic endpoint
+app.get('/server-ip', async (req, res) => {
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json');
+    const data = await ipRes.json();
+    return res.json(data);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // API Routes (version 1)
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/games', gamesRoutes);

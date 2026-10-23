@@ -92,7 +92,7 @@ export const fetchBrand1Card = async () => {
 
     const token =
       process.env.BRAND1CARD_API_TOKEN ||
-      'yzhm54xr2dh6778klm34c5y21';
+      '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
 
     const apiUrl =
       process.env.BRAND1CARD_API_URL ||
@@ -125,6 +125,13 @@ export const fetchBrand1Card = async () => {
     const json = await res.json();
     if (json && json.status === 'ERROR') {
       console.warn('Brand One Card API message:', json.msg || json);
+      if (json.code === 123 || (json.msg && json.msg.includes('IP'))) {
+        try {
+          const ipRes = await fetch('https://api.ipify.org?format=json');
+          const ipData = await ipRes.json();
+          console.warn(`🚨 [Brand One Card] IP NOT ALLOWED. Outgoing server IP is: ${ipData.ip}. Please whitelist this IP in the Brand One Card panel!`);
+        } catch (_) {}
+      }
       return [];
     }
 
@@ -950,7 +957,7 @@ export const getProductDetails = async (id) => {
 
       const token =
         process.env.BRAND1CARD_API_TOKEN ||
-        'yzhm54xr2dh6778klm34c5y21';
+        '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
 
       const baseUrl = product.source === 'brand1card'
         ? (process.env.BRAND1CARD_API_URL || 'https://api.brand-one-card.com/client/api/products')
