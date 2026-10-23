@@ -55,19 +55,19 @@ export const normalizeBrand1CardProduct = (item) => {
   if (item.category_img) {
     image = item.category_img.startsWith('http')
       ? item.category_img
-      : `https://api.brand1-card.com/${item.category_img.replace(/^\/+/, '')}`;
+      : `https://api.brand-one-card.com/${item.category_img.replace(/^\/+/, '')}`;
   }
 
   return {
     externalId: String(item.id),
-    source: 'syria_card',
-    sourceName: 'سيريا كارد',
+    source: 'brand1card',
+    sourceName: 'براند ون كارد',
     name,
     category,
     mainCategory,
     price: priceNum,
     originalPrice: priceNum,
-    currency: '$',
+    currency: item.currency === 'SYP' ? 'ل.س' : '$',
     image,
     isAvailable: item.available === true,
     minCount,

@@ -68,6 +68,10 @@ const productSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    price: {
+      type: Number,
+      default: 0,
+    },
     originalPrice: {
       type: Number,
       required: true,
@@ -120,6 +124,27 @@ const productSchema = new mongoose.Schema(
         delete ret._id;
         delete ret.__v;
         delete ret.rawPayload;
+        ret.price =
+          ret.sellingPrice !== null && ret.sellingPrice !== undefined && ret.sellingPrice > 0
+            ? ret.sellingPrice
+            : ret.price && ret.price > 0
+            ? ret.price
+            : ret.originalPrice || 0;
+        return ret;
+      },
+    },
+    toObject: {
+      transform: (doc, ret) => {
+        ret.id = ret._id;
+        delete ret._id;
+        delete ret.__v;
+        delete ret.rawPayload;
+        ret.price =
+          ret.sellingPrice !== null && ret.sellingPrice !== undefined && ret.sellingPrice > 0
+            ? ret.sellingPrice
+            : ret.price && ret.price > 0
+            ? ret.price
+            : ret.originalPrice || 0;
         return ret;
       },
     },

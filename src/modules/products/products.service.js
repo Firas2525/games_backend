@@ -84,7 +84,7 @@ export const fetchSwGamesSyp = async () => {
   }
 };
 
-// 2. Fetch from Brand 1 Card / Syria Card API (سيريا كارد - SYRIA_CARD)
+// 2. Fetch from Brand One Card API (براند ون كارد - BRAND1CARD)
 export const fetchBrand1Card = async () => {
   try {
     const controller = new AbortController();
@@ -92,9 +92,13 @@ export const fetchBrand1Card = async () => {
 
     const token =
       process.env.BRAND1CARD_API_TOKEN ||
-      'dc3df6e4e0da815834622859f6142e336cf1c553a627d213';
+      'yzhm54xr2dh6778klm34c5y21';
 
-    const res = await fetch('https://api.brand1-card.com/client/api/products', {
+    const apiUrl =
+      process.env.BRAND1CARD_API_URL ||
+      'https://api.brand-one-card.com/client/api/products';
+
+    const res = await fetch(apiUrl, {
       headers: {
         'api-token': token,
         'User-Agent': BROWSER_USER_AGENT,
@@ -107,27 +111,27 @@ export const fetchBrand1Card = async () => {
     if (res.status === 401) {
       const errJson = await res.json().catch(() => null);
       console.warn(
-        'Brand 1 Card (سيريا كارد) 401 Unauthorized. Server IP might need whitelisting in panel:',
+        'Brand One Card 401 Unauthorized. Token or IP might need whitelisting in panel:',
         errJson?.msg || errJson || '401'
       );
       return [];
     }
 
     if (!res.ok) {
-      console.warn(`Brand 1 Card API returned status ${res.status}`);
+      console.warn(`Brand One Card API returned status ${res.status}`);
       return [];
     }
 
     const json = await res.json();
     if (json && json.status === 'ERROR') {
-      console.warn('Brand 1 Card API message:', json.msg || json);
+      console.warn('Brand One Card API message:', json.msg || json);
       return [];
     }
 
     const items = Array.isArray(json) ? json : json?.data || [];
     return items.map(normalizeBrand1CardProduct);
   } catch (error) {
-    console.error('Brand 1 Card fetch error:', error.message);
+    console.error('Brand One Card fetch error:', error.message);
     return [];
   }
 };
@@ -174,7 +178,7 @@ export const syncAllProducts = async () => {
       { $set: { source: 'roya_usd', sourceName: 'رؤيا دولار' } }
     );
     await Product.updateMany(
-      { source: { $in: ['auto1card', 'brand1card'] } },
+      { source: 'auto1card' },
       { $set: { source: 'syria_card', sourceName: 'سيريا كارد' } }
     );
     await Product.updateMany(
@@ -241,7 +245,6 @@ export const syncAllProducts = async () => {
           $set: updateDoc,
           $setOnInsert: {
             isCategoryOverridden: false,
-            ...(isOverridden ? {} : { mainCategory: item.mainCategory }),
           },
         },
         upsert: true,
@@ -277,7 +280,8 @@ export const syncAllProducts = async () => {
     totalSynced,
     royaUsdCount: swUsdList.length,
     royaSypCount: swSypList.length,
-    syriaCardCount: brand1List.length + auto1List.length,
+    syriaCardCount: auto1List.length,
+    brand1CardCount: brand1List.length,
   };
 };
 
@@ -652,12 +656,17 @@ export const getSubCategories = async (mainCategory) => {
 
   return subCategories.map((sc) => {
     const scProducts = productsBySubId[sc._id.toString()] || [];
+    const validPrices = scProducts
+      .map((p) => (p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price && p.price > 0 ? p.price : (p.originalPrice || 0))))
+      .filter((pr) => pr > 0);
+    const startingPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+
     return {
       ...sc,
       id: sc._id,
       productCount: scProducts.length,
       products: scProducts,
-      startingPrice: scProducts.length > 0 ? Math.min(...scProducts.map((p) => p.price || p.originalPrice || 0)) : 0,
+      startingPrice,
       currency: scProducts.length > 0 ? scProducts[0].currency : '$',
     };
   });
@@ -815,6 +824,19 @@ export const getUserProducts = async (query = {}) => {
   }
 
   const products = await Product.find(filter).sort({ category: 1, name: 1 });
+  const mappedProducts = products.map((p) => {
+    const doc = p.toObject ? p.toObject() : { ...p };
+    const finalPrice =
+      doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
+        ? doc.sellingPrice
+        : doc.price && doc.price > 0
+        ? doc.price
+        : doc.originalPrice || 0;
+    return {
+      ...doc,
+      price: finalPrice,
+    };
+  });
 
   // Fetch subcategories for this view if mainCategory provided
   let subCategories = [];
@@ -824,7 +846,7 @@ export const getUserProducts = async (query = {}) => {
 
   // Group by category for a cleaner store layout
   const grouped = {};
-  for (const p of products) {
+  for (const p of mappedProducts) {
     if (!grouped[p.category]) {
       grouped[p.category] = [];
     }
@@ -832,7 +854,7 @@ export const getUserProducts = async (query = {}) => {
   }
 
   return {
-    products,
+    products: mappedProducts,
     grouped,
     categories: Object.keys(grouped),
     subCategories,
@@ -886,14 +908,21 @@ export const getProductDetails = async (id) => {
           cleanName(pkg.name);
       }
 
+      const calculatedPrice =
+        pkg.sellingPrice !== null && pkg.sellingPrice !== undefined && pkg.sellingPrice > 0
+          ? pkg.sellingPrice
+          : pkg.price && pkg.price > 0
+          ? pkg.price
+          : pkg.originalPrice || 0;
+
       return {
         id: pkg.externalId || pkg._id.toString(),
         productId: pkg._id.toString(),
         name: packageTitle || pkg.name,
         fullName: pkg.name,
         description: pkg.category,
-        price: pkg.price,
-        originalPrice: pkg.originalPrice || pkg.price,
+        price: calculatedPrice,
+        originalPrice: pkg.originalPrice || calculatedPrice,
         currency: pkg.currency || (pkg.source === 'roya_syp' ? 'ل.س' : '$'),
         params: (pkg.requiredFields || []).map(
           (f) => f.label || f.key || 'ايدي اللاعب'
@@ -913,7 +942,7 @@ export const getProductDetails = async (id) => {
     };
   }
 
-  // 2. If provider is Brand 1 Card / Syria Card
+  // 2. If provider is Brand One Card / Syria Card
   if (product.source === 'syria_card' || product.source === 'brand1card') {
     try {
       const controller = new AbortController();
@@ -921,10 +950,14 @@ export const getProductDetails = async (id) => {
 
       const token =
         process.env.BRAND1CARD_API_TOKEN ||
-        'dc3df6e4e0da815834622859f6142e336cf1c553a627d213';
+        'yzhm54xr2dh6778klm34c5y21';
+
+      const baseUrl = product.source === 'brand1card'
+        ? (process.env.BRAND1CARD_API_URL || 'https://api.brand-one-card.com/client/api/products')
+        : 'https://api.brand1-card.com/client/api/products';
 
       const res = await fetch(
-        `https://api.brand1-card.com/client/api/products?products_id=${product.externalId}`,
+        `${baseUrl}?products_id=${product.externalId}`,
         {
           headers: {
             'api-token': token,
@@ -961,17 +994,19 @@ export const getProductDetails = async (id) => {
             qtyValues = pkg.qty_values.map(Number).filter((v) => !isNaN(v));
           }
 
+          const calculatedPrice =
+            typeof pkg.price === 'number' && pkg.price > 0
+              ? pkg.price
+              : parseFloat(pkg.price || product.sellingPrice || product.price || product.originalPrice || 0);
+
           return {
             id: pkg.id?.toString() || product.externalId,
             productId: product._id.toString(),
             name: cleanName(pkg.name || product.name),
             fullName: pkg.name || product.name,
             description: pkg.description || product.category,
-            price:
-              typeof pkg.price === 'number'
-                ? pkg.price
-                : parseFloat(pkg.price || product.price),
-            originalPrice: product.originalPrice,
+            price: calculatedPrice,
+            originalPrice: product.originalPrice || calculatedPrice,
             currency: '$',
             params:
               Array.isArray(pkg.params) && pkg.params.length > 0
@@ -997,6 +1032,13 @@ export const getProductDetails = async (id) => {
   }
 
   // 3. Fallback for stored products
+  const fallbackPrice =
+    product.sellingPrice !== null && product.sellingPrice !== undefined && product.sellingPrice > 0
+      ? product.sellingPrice
+      : product.price && product.price > 0
+      ? product.price
+      : product.originalPrice || 0;
+
   return {
     product,
     source: product.source,
@@ -1007,8 +1049,8 @@ export const getProductDetails = async (id) => {
         name: cleanName(product.name),
         fullName: product.name,
         description: product.category,
-        price: product.price,
-        originalPrice: product.originalPrice,
+        price: fallbackPrice,
+        originalPrice: product.originalPrice || fallbackPrice,
         currency: product.currency || '$',
         params: product.requiredFields.map((f) => f.label || f.key || 'ايدي اللاعب'),
         categoryName: product.category,
