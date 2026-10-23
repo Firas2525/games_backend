@@ -10,6 +10,7 @@ import productsRoutes from './modules/products/products.routes.js';
 import bannersRoutes from './modules/banners/banners.routes.js';
 import { notFoundHandler, globalErrorHandler } from './middlewares/error.middleware.js';
 import { ApiResponse } from './utils/apiResponse.js';
+import { syncAllProducts } from './modules/products/products.service.js';
 
 const app = express();
 
@@ -33,6 +34,57 @@ app.get('/server-ip', async (req, res) => {
     return res.json(data);
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Live test for Brand One Card integration
+app.get('/test-brand', async (req, res) => {
+  try {
+    const token =
+      process.env.BRAND1CARD_API_TOKEN ||
+      '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
+    const apiUrl =
+      process.env.BRAND1CARD_API_URL ||
+      'https://api.brand-one-card.com/client/api/products';
+    const ipRes = await fetch('https://api.ipify.org?format=json')
+      .then((r) => r.json())
+      .catch(() => ({ ip: 'unknown' }));
+
+    const brandRes = await fetch(apiUrl, {
+      headers: {
+        'api-token': token,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+    });
+
+    const status = brandRes.status;
+    const bodyText = await brandRes.text();
+    let bodyJson = null;
+    try {
+      bodyJson = JSON.parse(bodyText);
+    } catch (_) {}
+
+    return res.json({
+      serverOutgoingIp: ipRes.ip,
+      brandStatus: status,
+      isOk: brandRes.ok,
+      itemCount: Array.isArray(bodyJson) ? bodyJson.length : 0,
+      sampleOrError: Array.isArray(bodyJson) ? bodyJson.slice(0, 2) : bodyJson || bodyText,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Force sync trigger endpoint
+app.get('/trigger-sync', async (req, res) => {
+  try {
+    const result = await syncAllProducts();
+    return res.json({ success: true, result });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
