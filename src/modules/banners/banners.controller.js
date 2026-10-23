@@ -29,13 +29,7 @@ const DEFAULT_BANNERS = [
 
 export const getBanners = async (req, res, next) => {
   try {
-    let banners = await Banner.find({ isActive: true }).sort({ order: 1, createdAt: -1 });
-
-    // Seed defaults if empty
-    if (!banners || banners.length === 0) {
-      banners = await Banner.insertMany(DEFAULT_BANNERS);
-    }
-
+    const banners = await Banner.find({ isActive: true }).sort({ order: 1, createdAt: -1 });
     return ApiResponse.success(res, banners, 'تم جلب الإعلانات بنجاح');
   } catch (error) {
     next(error);
@@ -76,10 +70,15 @@ export const createBanner = async (req, res, next) => {
 export const deleteBanner = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!id || id.startsWith('def_')) {
+      return ApiResponse.success(res, { id }, 'تم حذف الإعلان بنجاح');
+    }
+
     const deleted = await Banner.findByIdAndDelete(id);
 
     if (!deleted) {
-      return ApiResponse.error(res, 'الإعلان غير موجود', 404);
+      // Even if not in DB or already deleted, return success so client syncs smoothly
+      return ApiResponse.success(res, { id }, 'تم حذف الإعلان بنجاح');
     }
 
     return ApiResponse.success(res, { id }, 'تم حذف الإعلان بنجاح');
