@@ -31,7 +31,7 @@ export const normalizeSwGamesImage = (item = {}) => {
 
   if (!rawImg) return '';
 
-  rawImg = rawImg.replace(/\\\/g, '/');
+  rawImg = rawImg.replaceAll('\\', '/');
   if (rawImg.startsWith('http://127.0.0.1:8000')) {
     return rawImg.replace('http://127.0.0.1:8000', 'https://sw-games.net');
   }

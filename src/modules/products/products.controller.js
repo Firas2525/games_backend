@@ -70,6 +70,32 @@ export const bulkUpdateCategory = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, `تم نقل ${result.modifiedCount} منتج بنجاح`);
 });
 
+// Sub-Category handlers
+export const getSubCategoriesList = asyncHandler(async (req, res) => {
+  const result = await productsService.getSubCategories(req.query.mainCategory);
+  return ApiResponse.success(res, result, 'Subcategories fetched successfully');
+});
+
+export const addSubCategory = asyncHandler(async (req, res) => {
+  const result = await productsService.createSubCategory(req.body);
+  return ApiResponse.success(res, result, 'تم إنشاء التصنيف الفرعي وتجميع المنتجات بنجاح');
+});
+
+export const editSubCategory = asyncHandler(async (req, res) => {
+  const result = await productsService.updateSubCategory(req.params.id, req.body);
+  return ApiResponse.success(res, result, 'تم تحديث بيانات التصنيف الفرعي بنجاح');
+});
+
+export const removeSubCategory = asyncHandler(async (req, res) => {
+  const result = await productsService.deleteSubCategory(req.params.id);
+  return ApiResponse.success(res, result, 'تم حذف التصنيف الفرعي بنجاح وإلغاء تجميع المنتجات');
+});
+
+export const bulkAssignSubCategory = asyncHandler(async (req, res) => {
+  const result = await productsService.bulkAssignSubCategory(req.body);
+  return ApiResponse.success(res, result, `تم تجميع ${result.modifiedCount} منتج في التصنيف الفرعي بنجاح`);
+});
+
 export const getUserList = asyncHandler(async (req, res) => {
   const result = await productsService.getUserProducts(req.query);
   return ApiResponse.success(res, result, 'User products fetched successfully');

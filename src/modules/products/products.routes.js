@@ -12,6 +12,11 @@ import {
   addCategory,
   editCategory,
   removeCategory,
+  getSubCategoriesList,
+  addSubCategory,
+  editSubCategory,
+  removeSubCategory,
+  bulkAssignSubCategory,
   getUserList,
   getDetails,
 } from './products.controller.js';
@@ -23,6 +28,7 @@ const router = Router();
 // User / Public routes
 router.get('/', getUserList);
 router.get('/categories', getCategories);
+router.get('/subcategories', getSubCategoriesList);
 router.get('/stats', getStats);
 router.get('/sync-now', triggerSync);
 router.post('/sync-now', triggerSync);
@@ -36,6 +42,10 @@ router.get('/admin', getAdminList);
 router.post('/categories', addCategory);
 router.patch('/categories/:id', editCategory);
 router.delete('/categories/:id', removeCategory);
+router.post('/subcategories', addSubCategory);
+router.patch('/subcategories/:id', editSubCategory);
+router.delete('/subcategories/:id', removeSubCategory);
+router.patch('/bulk-subcategory', bulkAssignSubCategory);
 router.patch('/bulk-category', bulkUpdateCategory);
 router.patch('/category-group', updateCategoryGroup);
 router.patch('/:id/toggle-visibility', toggleVisibility);

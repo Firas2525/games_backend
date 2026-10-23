@@ -1,5 +1,6 @@
 import { Product } from './products.model.js';
 import { Category } from './categories.model.js';
+import { SubCategory } from './subcategories.model.js';
 import { normalizeSwGamesProduct } from './adapters/swGames.adapter.js';
 import { normalizeAuto1CardProduct } from './adapters/auto1card.adapter.js';
 import { normalizeBrand1CardProduct } from './adapters/brand1card.adapter.js';
@@ -627,6 +628,171 @@ export const updateCategoryGroup = async (categoryName, mainCategory) => {
   };
 };
 
+// 6.3 Sub-Categories Management (Groups within a Main Category)
+export const getSubCategories = async (mainCategory) => {
+  const filter = { isVisible: true };
+  if (mainCategory && mainCategory !== 'all') {
+    filter.mainCategory = mainCategory;
+  }
+  const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: -1 }).lean();
+
+  const subCategoryIds = subCategories.map((s) => s._id);
+  const products = await Product.find({
+    subCategoryId: { $in: subCategoryIds },
+    isAvailable: { $ne: false },
+    isVisible: { $ne: false },
+  }).select('id _id name image price originalPrice currency isAvailable isVisible subCategoryId subCategoryName').lean();
+
+  const productsBySubId = {};
+  for (const p of products) {
+    const sId = p.subCategoryId?.toString();
+    if (!productsBySubId[sId]) productsBySubId[sId] = [];
+    productsBySubId[sId].push(p);
+  }
+
+  return subCategories.map((sc) => {
+    const scProducts = productsBySubId[sc._id.toString()] || [];
+    return {
+      ...sc,
+      id: sc._id,
+      productCount: scProducts.length,
+      products: scProducts,
+      startingPrice: scProducts.length > 0 ? Math.min(...scProducts.map((p) => p.price || p.originalPrice || 0)) : 0,
+      currency: scProducts.length > 0 ? scProducts[0].currency : '$',
+    };
+  });
+};
+
+export const createSubCategory = async (data) => {
+  let { mainCategory, name, imageUrl, productIds } = data;
+  if (!name || !name.trim()) {
+    throw new ApiError('اسم التصنيف الفرعي مطلوب', HTTP_STATUS.BAD_REQUEST);
+  }
+  if (!mainCategory || !mainCategory.trim()) {
+    throw new ApiError('القسم الرئيسي مطلوب', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const subCategory = await SubCategory.create({
+    mainCategory: mainCategory.trim(),
+    name: name.trim(),
+    imageUrl: imageUrl?.trim() || '',
+    isVisible: true,
+  });
+
+  if (Array.isArray(productIds) && productIds.length > 0) {
+    await Product.updateMany(
+      { _id: { $in: productIds } },
+      {
+        $set: {
+          mainCategory: mainCategory.trim(),
+          subCategoryId: subCategory._id,
+          subCategoryName: subCategory.name,
+          subCategoryImage: subCategory.imageUrl,
+          isCategoryOverridden: true,
+        },
+      }
+    );
+  }
+
+  return subCategory;
+};
+
+export const updateSubCategory = async (id, data) => {
+  const subCategory = await SubCategory.findById(id);
+  if (!subCategory) {
+    throw new ApiError('التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  const { name, imageUrl, mainCategory, productIds, isVisible } = data;
+  if (name !== undefined) subCategory.name = name.trim();
+  if (imageUrl !== undefined) subCategory.imageUrl = imageUrl.trim();
+  if (mainCategory !== undefined) subCategory.mainCategory = mainCategory.trim();
+  if (isVisible !== undefined) subCategory.isVisible = isVisible;
+  await subCategory.save();
+
+  await Product.updateMany(
+    { subCategoryId: subCategory._id },
+    {
+      $set: {
+        subCategoryName: subCategory.name,
+        subCategoryImage: subCategory.imageUrl,
+        ...(mainCategory ? { mainCategory: subCategory.mainCategory } : {}),
+      },
+    }
+  );
+
+  if (Array.isArray(productIds)) {
+    await Product.updateMany(
+      { subCategoryId: subCategory._id, _id: { $nin: productIds } },
+      { $set: { subCategoryId: null, subCategoryName: '', subCategoryImage: '' } }
+    );
+    await Product.updateMany(
+      { _id: { $in: productIds } },
+      {
+        $set: {
+          mainCategory: subCategory.mainCategory,
+          subCategoryId: subCategory._id,
+          subCategoryName: subCategory.name,
+          subCategoryImage: subCategory.imageUrl,
+          isCategoryOverridden: true,
+        },
+      }
+    );
+  }
+
+  return subCategory;
+};
+
+export const deleteSubCategory = async (id) => {
+  const subCategory = await SubCategory.findById(id);
+  if (!subCategory) {
+    throw new ApiError('التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  await Product.updateMany(
+    { subCategoryId: subCategory._id },
+    { $set: { subCategoryId: null, subCategoryName: '', subCategoryImage: '' } }
+  );
+
+  await subCategory.deleteOne();
+  return { message: 'تم حذف التصنيف الفرعي بنجاح وإلغاء تجميع المنتجات التابعة له', id };
+};
+
+export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCategoryName, subCategoryImage, mainCategory }) => {
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    throw new ApiError('يجب تحديد المنتجات أولاً', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  let finalSubId = subCategoryId;
+  let finalSubName = subCategoryName;
+  let finalSubImage = subCategoryImage;
+
+  if (subCategoryId) {
+    const existing = await SubCategory.findById(subCategoryId);
+    if (existing) {
+      finalSubName = existing.name;
+      finalSubImage = existing.imageUrl;
+    }
+  }
+
+  const updateFields = {
+    subCategoryId: finalSubId || null,
+    subCategoryName: finalSubName || '',
+    subCategoryImage: finalSubImage || '',
+    isCategoryOverridden: true,
+  };
+  if (mainCategory) {
+    updateFields.mainCategory = mainCategory.trim();
+  }
+
+  const result = await Product.updateMany(
+    { _id: { $in: productIds } },
+    { $set: updateFields }
+  );
+
+  return { modifiedCount: result.modifiedCount };
+};
+
 // 7. User: Get visible products grouped by Category (All active products visible by default)
 export const getUserProducts = async (query = {}) => {
   const filter = {
@@ -644,10 +810,17 @@ export const getUserProducts = async (query = {}) => {
     filter.$or = [
       { name: { $regex: query.search, $options: 'i' } },
       { category: { $regex: query.search, $options: 'i' } },
+      { subCategoryName: { $regex: query.search, $options: 'i' } },
     ];
   }
 
   const products = await Product.find(filter).sort({ category: 1, name: 1 });
+
+  // Fetch subcategories for this view if mainCategory provided
+  let subCategories = [];
+  try {
+    subCategories = await getSubCategories(query.mainCategory || 'all');
+  } catch (_) {}
 
   // Group by category for a cleaner store layout
   const grouped = {};
@@ -662,6 +835,7 @@ export const getUserProducts = async (query = {}) => {
     products,
     grouped,
     categories: Object.keys(grouped),
+    subCategories,
   };
 };
 

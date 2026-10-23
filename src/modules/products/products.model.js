@@ -46,6 +46,23 @@ const productSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    subCategoryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SubCategory',
+      default: null,
+      index: true,
+    },
+    subCategoryName: {
+      type: String,
+      default: '',
+      trim: true,
+      index: true,
+    },
+    subCategoryImage: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     isCategoryOverridden: {
       type: Boolean,
       default: false,
