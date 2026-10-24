@@ -15,7 +15,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['deposit', 'deduction'],
+      enum: ['deposit', 'deduction', 'purchase'],
       required: true,
     },
     currency: {
@@ -26,7 +26,30 @@ const transactionSchema = new mongoose.Schema(
     amount: {
       type: Number,
       required: true,
-      min: [0.01, 'Amount must be greater than zero'],
+      min: [0.0001, 'Amount must be greater than zero'],
+    },
+    costPrice: {
+      type: Number,
+      default: 0,
+    },
+    profit: {
+      type: Number,
+      default: 0,
+    },
+    productName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    targetId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    orderId: {
+      type: String,
+      default: '',
+      trim: true,
     },
     previousBalance: {
       type: Number,

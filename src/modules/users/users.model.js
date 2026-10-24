@@ -59,6 +59,14 @@ const userSchema = new mongoose.Schema(
       default: 0,
       min: [0, 'Balance cannot be negative'],
     },
+    totalSpent: {
+      type: Number,
+      default: 0,
+    },
+    totalProfit: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

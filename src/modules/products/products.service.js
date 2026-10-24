@@ -8,6 +8,7 @@ import { detectMainCategory, cleanName } from './utils/categorizer.js';
 import { seedLegacyOverrides } from '../../scripts/seedLegacyOverrides.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { getSettings } from '../settings/settings.service.js';
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -333,13 +334,29 @@ export const getAdminProducts = async (query = {}) => {
     .sort({ category: 1, name: 1 })
     .lean();
 
+  const settings = await getSettings();
+  const profitPercentage = settings.profitPercentage || 0;
+
+  const mappedProducts = products.map((p) => {
+    const baseCost = p.originalPrice && p.originalPrice > 0 ? p.originalPrice : (p.price || 0);
+    const calculatedPrice = profitPercentage > 0
+      ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+      : baseCost;
+    return {
+      ...p,
+      costPrice: baseCost,
+      calculatedPrice,
+    };
+  });
+
   const categories = await Product.distinct('category');
   const sources = await Product.distinct('sourceName');
 
   return {
-    products,
+    products: mappedProducts,
     categories,
     sources,
+    profitPercentage,
     totalCount: products.length,
   };
 };
@@ -830,17 +847,25 @@ export const getUserProducts = async (query = {}) => {
     ];
   }
 
+  const settings = await getSettings();
+  const profitPercentage = settings.profitPercentage || 0;
+
   const products = await Product.find(filter).sort({ category: 1, name: 1 });
   const mappedProducts = products.map((p) => {
     const doc = p.toObject ? p.toObject() : { ...p };
-    const finalPrice =
+    const baseCost =
       doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
         ? doc.sellingPrice
         : doc.price && doc.price > 0
         ? doc.price
         : doc.originalPrice || 0;
+    const finalPrice =
+      profitPercentage > 0
+        ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+        : baseCost;
     return {
       ...doc,
+      costPrice: baseCost,
       price: finalPrice,
     };
   });
@@ -874,6 +899,9 @@ export const getProductDetails = async (id) => {
   if (!product) {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
   }
+
+  const settings = await getSettings();
+  const profitPercentage = settings.profitPercentage || 0;
 
   // 1. If provider is SW Games (رؤيا - ROYA_USD / ROYA_SYP)
   if (
@@ -915,12 +943,17 @@ export const getProductDetails = async (id) => {
           cleanName(pkg.name);
       }
 
-      const calculatedPrice =
-        pkg.sellingPrice !== null && pkg.sellingPrice !== undefined && pkg.sellingPrice > 0
+      const baseCost =
+        pkg.originalPrice && pkg.originalPrice > 0
+          ? pkg.originalPrice
+          : pkg.sellingPrice && pkg.sellingPrice > 0
           ? pkg.sellingPrice
-          : pkg.price && pkg.price > 0
-          ? pkg.price
-          : pkg.originalPrice || 0;
+          : pkg.price || 0;
+
+      const userPrice =
+        profitPercentage > 0
+          ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+          : baseCost;
 
       return {
         id: pkg.externalId || pkg._id.toString(),
@@ -928,8 +961,9 @@ export const getProductDetails = async (id) => {
         name: packageTitle || pkg.name,
         fullName: pkg.name,
         description: pkg.category,
-        price: calculatedPrice,
-        originalPrice: pkg.originalPrice || calculatedPrice,
+        price: userPrice,
+        costPrice: baseCost,
+        originalPrice: baseCost,
         currency: pkg.currency || (pkg.source === 'roya_syp' ? 'ل.س' : '$'),
         params: (pkg.requiredFields || []).map(
           (f) => f.label || f.key || 'ايدي اللاعب'
@@ -1001,10 +1035,15 @@ export const getProductDetails = async (id) => {
             qtyValues = pkg.qty_values.map(Number).filter((v) => !isNaN(v));
           }
 
-          const calculatedPrice =
+          const baseCost =
             typeof pkg.price === 'number' && pkg.price > 0
               ? pkg.price
               : parseFloat(pkg.price || product.sellingPrice || product.price || product.originalPrice || 0);
+
+          const userPrice =
+            profitPercentage > 0
+              ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+              : baseCost;
 
           return {
             id: pkg.id?.toString() || product.externalId,
@@ -1012,8 +1051,9 @@ export const getProductDetails = async (id) => {
             name: cleanName(pkg.name || product.name),
             fullName: pkg.name || product.name,
             description: pkg.description || product.category,
-            price: calculatedPrice,
-            originalPrice: product.originalPrice || calculatedPrice,
+            price: userPrice,
+            costPrice: baseCost,
+            originalPrice: product.originalPrice || baseCost,
             currency: '$',
             params:
               Array.isArray(pkg.params) && pkg.params.length > 0
@@ -1039,12 +1079,17 @@ export const getProductDetails = async (id) => {
   }
 
   // 3. Fallback for stored products
-  const fallbackPrice =
-    product.sellingPrice !== null && product.sellingPrice !== undefined && product.sellingPrice > 0
+  const fallbackBaseCost =
+    product.originalPrice && product.originalPrice > 0
+      ? product.originalPrice
+      : product.sellingPrice && product.sellingPrice > 0
       ? product.sellingPrice
-      : product.price && product.price > 0
-      ? product.price
-      : product.originalPrice || 0;
+      : product.price || 0;
+
+  const fallbackUserPrice =
+    profitPercentage > 0
+      ? Number((fallbackBaseCost * (1 + profitPercentage / 100)).toFixed(4))
+      : fallbackBaseCost;
 
   return {
     product,
@@ -1056,8 +1101,9 @@ export const getProductDetails = async (id) => {
         name: cleanName(product.name),
         fullName: product.name,
         description: product.category,
-        price: fallbackPrice,
-        originalPrice: product.originalPrice || fallbackPrice,
+        price: fallbackUserPrice,
+        costPrice: fallbackBaseCost,
+        originalPrice: fallbackBaseCost,
         currency: product.currency || '$',
         params: product.requiredFields.map((f) => f.label || f.key || 'ايدي اللاعب'),
         categoryName: product.category,

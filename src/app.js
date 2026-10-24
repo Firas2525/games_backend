@@ -8,6 +8,8 @@ import gamesRoutes from './modules/games/games.routes.js';
 import usersRoutes from './modules/users/users.routes.js';
 import productsRoutes from './modules/products/products.routes.js';
 import bannersRoutes from './modules/banners/banners.routes.js';
+import settingsRoutes from './modules/settings/settings.routes.js';
+import ordersRoutes from './modules/orders/orders.routes.js';
 import { notFoundHandler, globalErrorHandler } from './middlewares/error.middleware.js';
 import { ApiResponse } from './utils/apiResponse.js';
 import { syncAllProducts } from './modules/products/products.service.js';
@@ -94,6 +96,8 @@ app.use('/api/v1/games', gamesRoutes);
 app.use('/api/v1/users', usersRoutes);
 app.use('/api/v1/products', productsRoutes);
 app.use('/api/v1/banners', bannersRoutes);
+app.use('/api/v1/settings', settingsRoutes);
+app.use('/api/v1/orders', ordersRoutes);
 
 // Error handlers
 app.use(notFoundHandler);
