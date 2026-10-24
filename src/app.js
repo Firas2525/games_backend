@@ -10,6 +10,8 @@ import productsRoutes from './modules/products/products.routes.js';
 import bannersRoutes from './modules/banners/banners.routes.js';
 import settingsRoutes from './modules/settings/settings.routes.js';
 import ordersRoutes from './modules/orders/orders.routes.js';
+import logsRoutes from './modules/logs/logs.routes.js';
+import { auditLogMiddleware } from './middlewares/auditLog.middleware.js';
 import { notFoundHandler, globalErrorHandler } from './middlewares/error.middleware.js';
 import { ApiResponse } from './utils/apiResponse.js';
 import { syncAllProducts } from './modules/products/products.service.js';
@@ -90,6 +92,9 @@ app.get('/trigger-sync', async (req, res) => {
   }
 });
 
+// Audit logging middleware for every API operation
+app.use('/api/v1', auditLogMiddleware);
+
 // API Routes (version 1)
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/games', gamesRoutes);
@@ -98,6 +103,7 @@ app.use('/api/v1/products', productsRoutes);
 app.use('/api/v1/banners', bannersRoutes);
 app.use('/api/v1/settings', settingsRoutes);
 app.use('/api/v1/orders', ordersRoutes);
+app.use('/api/v1/logs', logsRoutes);
 
 // Error handlers
 app.use(notFoundHandler);

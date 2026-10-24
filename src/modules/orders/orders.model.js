@@ -78,6 +78,10 @@ const orderSchema = new mongoose.Schema(
       default: 'completed',
       index: true,
     },
+    providerOrderId: {
+      type: String,
+      default: '',
+    },
     providerPayload: {
       type: mongoose.Schema.Types.Mixed,
       default: null,

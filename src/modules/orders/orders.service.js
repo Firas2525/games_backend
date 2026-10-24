@@ -6,6 +6,8 @@ import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
+import { dispatchProviderOrder } from './providerDispatch.service.js';
+
 export const executePurchase = async ({
   userId,
   productId,
@@ -116,8 +118,8 @@ export const executePurchase = async ({
   // 6. Generate unique order ID
   const orderId = `ORD-${Date.now().toString().slice(-6)}${Math.floor(1000 + Math.random() * 9000)}`;
 
-  // 7. What is sent to provider API is the BASE cost and payload (NOT user price)
-  const providerPayload = {
+  // 7. Dispatch order to external Provider API (SW Games / Brand1Card / Auto1Card)
+  const basePayload = {
     externalId: product?.externalId || packageId,
     targetId: targetId || '',
     costPrice: totalCost, // Base price sent to provider
@@ -125,7 +127,35 @@ export const executePurchase = async ({
     extraFields,
   };
 
-  // 8. Create Order Record
+  let dispatchResult = {
+    success: true,
+    status: 'completed',
+    providerPayload: basePayload,
+    providerResponse: null,
+    providerOrderId: null,
+  };
+
+  try {
+    dispatchResult = await dispatchProviderOrder({
+      product,
+      orderId,
+      targetId,
+      quantity: validQuantity,
+      extraFields,
+      user,
+    });
+  } catch (dispErr) {
+    console.error('Provider dispatch exception:', dispErr);
+    dispatchResult = {
+      success: false,
+      status: 'processing',
+      providerPayload: basePayload,
+      providerResponse: { error: dispErr.message },
+      providerOrderId: null,
+    };
+  }
+
+  // 8. Create Order Record with full execution details
   const order = await Order.create({
     orderId,
     userId: user._id,
@@ -142,8 +172,10 @@ export const executePurchase = async ({
     profitPercentage,
     discountPercent,
     currency: effectiveCurrency,
-    status: 'completed',
-    providerPayload,
+    status: dispatchResult.status || 'completed',
+    providerOrderId: dispatchResult.providerOrderId || '',
+    providerPayload: dispatchResult.providerPayload || basePayload,
+    providerResponse: dispatchResult.providerResponse || null,
   });
 
   // 9. Create Transaction Record
