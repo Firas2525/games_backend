@@ -6,7 +6,7 @@ import { Product } from '../products/products.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-import { dispatchProviderOrder, checkExternalOrderStatus } from './providerDispatch.service.js';
+import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
 
 export const executePurchase = async ({
   userId,
@@ -277,56 +277,178 @@ export const executePurchase = async ({
   };
 };
 
-export const getUserOrders = async (userId) => {
-  // 1. Check & Sync any pending/processing orders from external providers before returning to user
-  const pendingOrders = await Order.find({
-    userId,
-    status: { $in: ['processing', 'pending'] },
-    providerOrderId: { $exists: true, $ne: '' },
+/**
+ * Automatically refunds user wallet for a failed/cancelled order with full price (including profit margin).
+ * Guaranteed to prevent double refunds via the `refunded` boolean flag.
+ */
+export const refundOrderWallet = async (order, resultData = null, customNote = '') => {
+  if (order.refunded) {
+    return false;
+  }
+
+  const user = await User.findById(order.userId);
+  if (!user) {
+    console.error(`User ${order.userId} not found for refunding order ${order.orderId}`);
+    return false;
+  }
+
+  // Full refund: userPrice = costPrice + profit (everything deducted from user wallet)
+  const refundAmount = Number((order.userPrice || 0).toFixed(4));
+  const prevBal = Number((user.balance || 0).toFixed(4));
+  const newBal = Number((prevBal + refundAmount).toFixed(4));
+
+  user.balance = newBal;
+  user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
+  user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
+  await user.save();
+
+  order.status = 'failed';
+  order.refunded = true;
+  if (resultData?.rawData) {
+    order.providerResponse = resultData.rawData;
+  }
+  if (resultData?.providerOrderNumber) {
+    order.providerOrderId = resultData.providerOrderNumber;
+  }
+  await order.save();
+
+  await Transaction.create({
+    userId: order.userId,
+    type: 'refund',
+    currency: user.currency || order.currency || 'USD',
+    amount: refundAmount,
+    costPrice: order.costPrice || 0,
+    profit: order.profit || 0,
+    productName: order.productName,
+    targetId: order.targetId || '',
+    orderId: order.orderId,
+    previousBalance: prevBal,
+    newBalance: newBal,
+    note:
+      customNote ||
+      `استرجاع رصيد تلقائي لإلغاء/فشل الطلب من المزود (#${resultData?.providerOrderNumber || order.providerOrderId || order.orderId}): ${order.productName} (تم استرجاع ${refundAmount} ${order.currency || 'USD'} متضمنة نسبة الربح كاملة)`,
   });
 
-  if (pendingOrders.length > 0) {
-    for (const order of pendingOrders) {
-      try {
-        const checkResult = await checkExternalOrderStatus(order);
-        if (checkResult.changed && checkResult.status !== order.status) {
-          order.status = checkResult.status;
-          if (checkResult.rawData) {
-            order.providerResponse = checkResult.rawData;
-          }
-          if (checkResult.status === 'failed' && !order.refunded) {
-            const user = await User.findById(userId);
-            if (user) {
-              const refundAmount = Number((order.userPrice || 0).toFixed(4));
-              const prevBal = user.balance || 0;
-              user.balance = Number((prevBal + refundAmount).toFixed(4));
-              user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
-              user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
-              await user.save();
+  return true;
+};
 
-              order.refunded = true;
+/**
+ * Batch syncs orders status with external providers (SW Games & Brand One Card)
+ * Automatically triggers wallet refund for any order cancelled or failed by the provider.
+ */
+export const syncOrdersBatch = async (ordersList) => {
+  if (!ordersList || ordersList.length === 0) return 0;
 
-              // Record refund transaction
-              await Transaction.create({
-                userId,
-                type: 'refund',
-                currency: user.currency || 'USD',
-                amount: refundAmount,
-                productName: order.productName,
-                targetId: order.targetId || '',
-                orderId: order.orderId,
-                previousBalance: prevBal,
-                newBalance: user.balance,
-                note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
-              });
-            }
-          }
-          await order.save();
-        }
-      } catch (e) {
-        console.error(`Error checking order ${order.orderId}:`, e);
+  let updatedCount = 0;
+  const swUsdOrders = [];
+  const swSypOrders = [];
+  const otherOrders = [];
+
+  for (const o of ordersList) {
+    const isSw =
+      o.source === 'roya_usd' ||
+      o.source === 'roya_syp' ||
+      o.source === 'sw_games' ||
+      (!['brand1card', 'auto1card'].includes(o.source) && (o.providerOrderId || o.providerPayload));
+
+    if (isSw) {
+      if (o.source === 'roya_syp' || o.currency === 'SYP') {
+        swSypOrders.push(o);
+      } else {
+        swUsdOrders.push(o);
       }
+    } else {
+      otherOrders.push(o);
     }
+  }
+
+  // 1. SW Games USD batch check (e.g. https://sw-games.net/api/fastapi/checkorders?order_ids=...)
+  if (swUsdOrders.length > 0) {
+    try {
+      const swUsdResults = await checkSwGamesOrdersBatch(swUsdOrders, false);
+      for (const order of swUsdOrders) {
+        const res = swUsdResults.get(order._id.toString());
+        if (res) {
+          if (res.status === 'failed' && !order.refunded) {
+            await refundOrderWallet(order, res);
+            updatedCount++;
+          } else if (res.status === 'completed' && order.status !== 'completed') {
+            order.status = 'completed';
+            if (res.rawData) order.providerResponse = res.rawData;
+            if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+            await order.save();
+            updatedCount++;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error batch syncing SW Games USD orders:', e);
+    }
+  }
+
+  // 2. SW Games SYP batch check
+  if (swSypOrders.length > 0) {
+    try {
+      const swSypResults = await checkSwGamesOrdersBatch(swSypOrders, true);
+      for (const order of swSypOrders) {
+        const res = swSypResults.get(order._id.toString());
+        if (res) {
+          if (res.status === 'failed' && !order.refunded) {
+            await refundOrderWallet(order, res);
+            updatedCount++;
+          } else if (res.status === 'completed' && order.status !== 'completed') {
+            order.status = 'completed';
+            if (res.rawData) order.providerResponse = res.rawData;
+            if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+            await order.save();
+            updatedCount++;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error batch syncing SW Games SYP orders:', e);
+    }
+  }
+
+  // 3. Other orders (e.g. Brand One Card)
+  for (const order of otherOrders) {
+    try {
+      const checkResult = await checkExternalOrderStatus(order);
+      if (checkResult.changed && checkResult.status !== order.status) {
+        if (checkResult.status === 'failed' && !order.refunded) {
+          await refundOrderWallet(order, checkResult);
+          updatedCount++;
+        } else if (checkResult.status === 'completed') {
+          order.status = 'completed';
+          if (checkResult.rawData) order.providerResponse = checkResult.rawData;
+          await order.save();
+          updatedCount++;
+        }
+      }
+    } catch (e) {
+      console.error(`Error checking order ${order.orderId}:`, e);
+    }
+  }
+
+  return updatedCount;
+};
+
+export const getUserOrders = async (userId) => {
+  // Sync candidate orders (not failed and not yet refunded, or processing) from the last 30 days
+  const candidateOrders = await Order.find({
+    userId,
+    refunded: { $ne: true },
+    status: { $ne: 'failed' },
+    $or: [
+      { providerOrderId: { $exists: true, $ne: '' } },
+      { 'providerPayload.params.order_uuid': { $exists: true } },
+      { 'providerPayload.params.uuid': { $exists: true } },
+      { orderId: { $exists: true } },
+    ],
+  }).limit(50);
+
+  if (candidateOrders.length > 0) {
+    await syncOrdersBatch(candidateOrders);
   }
 
   return await Order.find({ userId }).sort({ createdAt: -1 });
@@ -351,103 +473,62 @@ export const checkSingleOrder = async (orderId) => {
     throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  if (order.status !== 'processing' && order.status !== 'pending') {
-    return { order, message: `الطلب بحالة ${order.status} حالياً ولا يحتاج فحص` };
+  if (order.status === 'failed' && order.refunded) {
+    return { order: order.toJSON(), message: 'الطلب ملغي ومسترجع مسبقاً' };
   }
 
-  const checkResult = await checkExternalOrderStatus(order);
-  if (checkResult.changed && checkResult.status !== order.status) {
-    order.status = checkResult.status;
-    if (checkResult.rawData) {
-      order.providerResponse = checkResult.rawData;
-    }
+  let updated = false;
+  const isSw =
+    order.source === 'roya_usd' ||
+    order.source === 'roya_syp' ||
+    order.source === 'sw_games' ||
+    (!['brand1card', 'auto1card'].includes(order.source));
 
-    // If external status changed to failed, refund user automatically
-    if (checkResult.status === 'failed' && !order.refunded) {
-      const user = await User.findById(order.userId);
-      if (user) {
-        const refundAmount = Number((order.userPrice || 0).toFixed(4));
-        const prevBal = user.balance || 0;
-        user.balance = Number((prevBal + refundAmount).toFixed(4));
-        user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
-        user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
-        await user.save();
-
-        order.refunded = true;
-
-        await Transaction.create({
-          userId: order.userId,
-          type: 'refund',
-          currency: user.currency || 'USD',
-          amount: refundAmount,
-          productName: order.productName,
-          targetId: order.targetId || '',
-          orderId: order.orderId,
-          previousBalance: prevBal,
-          newBalance: user.balance,
-          note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
-        });
+  if (isSw) {
+    const isSyp = order.source === 'roya_syp' || order.currency === 'SYP';
+    const batchRes = await checkSwGamesOrdersBatch([order], isSyp);
+    const res = batchRes.get(order._id.toString());
+    if (res) {
+      if (res.status === 'failed' && !order.refunded) {
+        await refundOrderWallet(order, res);
+        updated = true;
+      } else if (res.status === 'completed' && order.status !== 'completed') {
+        order.status = 'completed';
+        if (res.rawData) order.providerResponse = res.rawData;
+        if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+        await order.save();
+        updated = true;
       }
     }
-    await order.save();
+  } else {
+    const checkResult = await checkExternalOrderStatus(order);
+    if (checkResult.changed) {
+      if (checkResult.status === 'failed' && !order.refunded) {
+        await refundOrderWallet(order, checkResult);
+        updated = true;
+      } else if (checkResult.status === 'completed') {
+        order.status = 'completed';
+        if (checkResult.rawData) order.providerResponse = checkResult.rawData;
+        await order.save();
+        updated = true;
+      }
+    }
   }
 
   return {
     order: order.toJSON(),
-    updated: checkResult.changed,
+    updated,
     status: order.status,
   };
 };
 
 export const syncPendingOrders = async () => {
   const pendingOrders = await Order.find({
+    refunded: { $ne: true },
     status: { $in: ['processing', 'pending'] },
-    providerOrderId: { $exists: true, $ne: '' },
   }).limit(50);
 
-  let updatedCount = 0;
-  for (const order of pendingOrders) {
-    try {
-      const checkResult = await checkExternalOrderStatus(order);
-      if (checkResult.changed && checkResult.status !== order.status) {
-        order.status = checkResult.status;
-        if (checkResult.rawData) {
-          order.providerResponse = checkResult.rawData;
-        }
-        if (checkResult.status === 'failed' && !order.refunded) {
-          const user = await User.findById(order.userId);
-          if (user) {
-            const refundAmount = Number((order.userPrice || 0).toFixed(4));
-            const prevBal = user.balance || 0;
-            user.balance = Number((prevBal + refundAmount).toFixed(4));
-            user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
-            user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
-            await user.save();
-
-            order.refunded = true;
-
-            await Transaction.create({
-              userId: order.userId,
-              type: 'refund',
-              currency: user.currency || 'USD',
-              amount: refundAmount,
-              productName: order.productName,
-              targetId: order.targetId || '',
-              orderId: order.orderId,
-              previousBalance: prevBal,
-              newBalance: user.balance,
-              note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
-            });
-          }
-        }
-        await order.save();
-        updatedCount++;
-      }
-    } catch (e) {
-      console.error(`Error syncing order ${order.orderId}:`, e);
-    }
-  }
-
+  const updatedCount = await syncOrdersBatch(pendingOrders);
   return { checkedCount: pendingOrders.length, updatedCount };
 };
 

@@ -408,12 +408,16 @@ export const dispatchProviderOrder = async ({
  * Checks external order status from provider API (mirroring goldsm_sync_pending_order)
  */
 export const checkExternalOrderStatus = async (order) => {
-  if (!order || !order.providerOrderId) {
+  if (!order) {
     return { changed: false, status: order?.status };
   }
 
   const source = order.source;
-  const providerOrderId = order.providerOrderId;
+  const providerOrderId = order.providerOrderId || order.providerPayload?.params?.order_uuid || order.orderId;
+
+  if (!providerOrderId) {
+    return { changed: false, status: order.status };
+  }
 
   try {
     // 1. SW Games / Roya check
@@ -423,25 +427,67 @@ export const checkExternalOrderStatus = async (order) => {
         ? (process.env.SW_GAMES_SYP_TOKEN || 'yzhm54xr2dh6778klm34c5y21')
         : (process.env.SW_GAMES_USD_TOKEN || 'i1zz8ajhxca9419asucqcmj6z6');
 
+      // First check using single order direct endpoint: /order/{id_or_uuid}
+      try {
+        const singleUrl = `https://sw-games.net/api/fastapi/order/${providerOrderId}`;
+        const singleRes = await fetch(singleUrl, {
+          headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+        });
+
+        if (singleRes.ok) {
+          const singleData = await singleRes.json();
+          const orderObj = singleData?.data?.order || singleData?.order;
+          if (orderObj) {
+            const raw = String(orderObj.status || '').toLowerCase();
+            if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted', 'تم', 'منجز', 'مكتمل'].includes(raw)) {
+              return { changed: true, status: 'completed', rawData: orderObj };
+            }
+            if (['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused', 'ملغي', 'فشل', 'مرفوض'].includes(raw) || orderObj.error) {
+              return { changed: true, status: 'failed', rawData: orderObj };
+            }
+            if (['0', 'processing', 'pending', 'wait', 'waiting', 'inprogress'].includes(raw)) {
+              return { changed: order.status !== 'processing', status: 'processing', rawData: orderObj };
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Fallback to /checkorders endpoint
       const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${providerOrderId}`;
       const res = await fetch(url, {
         headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
       });
       if (res.ok) {
         const data = await res.json();
-        const ordersList = Array.isArray(data) ? data : data?.data || data?.orders || [];
-        const item = ordersList.find((o) => String(o.order_id || o.order_number || o.id) === String(providerOrderId)) || ordersList[0];
+        const ordersList = Array.isArray(data?.data?.orders)
+          ? data.data.orders
+          : Array.isArray(data?.orders)
+          ? data.orders
+          : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+          ? data
+          : [];
+
+        const item = ordersList.find((o) => {
+          const keys = [o.order_id, o.order_number, o.id, o.uuid].filter(Boolean).map(String);
+          return keys.includes(String(providerOrderId));
+        }) || ordersList[0];
+
         if (item) {
           const raw = String(item.status || item.order_status || item.status_name || '').toLowerCase();
-          if (['1', 'true', 'completed', 'done', 'success', 'accepted', 'تم', 'منجز', 'مكتمل'].includes(raw)) {
+          if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted', 'تم', 'منجز', 'مكتمل'].includes(raw)) {
             return { changed: true, status: 'completed', rawData: item };
           }
           if (
-            ['2', '3', 'failed', 'fail', 'error', 'rejected', 'refused', 'cancelled', 'canceled', 'cancel', 'ملغي', 'فشل', 'مرفوض'].includes(raw) ||
+            ['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused', 'ملغي', 'فشل', 'مرفوض'].includes(raw) ||
             item.error ||
             item.ok === false
           ) {
             return { changed: true, status: 'failed', rawData: item };
+          }
+          if (['0', 'processing', 'pending', 'wait', 'waiting'].includes(raw)) {
+            return { changed: order.status !== 'processing', status: 'processing', rawData: item };
           }
         } else if (data?.ok === false || data?.error) {
           return { changed: true, status: 'failed', rawData: data };
@@ -468,7 +514,7 @@ export const checkExternalOrderStatus = async (order) => {
           if (['accept', 'completed', 'done', 'success'].includes(st)) {
             return { changed: true, status: 'completed', rawData: item };
           }
-          if (['reject', 'rejected', 'failed', 'error', 'canceled'].includes(st) || item.error) {
+          if (['reject', 'rejected', 'failed', 'error', 'canceled', 'cancelled'].includes(st) || item.error) {
             return { changed: true, status: 'failed', rawData: item };
           }
         }
@@ -479,4 +525,141 @@ export const checkExternalOrderStatus = async (order) => {
   }
 
   return { changed: false, status: order.status };
+};
+
+/**
+ * Batch checks status for multiple SW Games orders in a single API call (mirroring checkorders?order_ids=...)
+ */
+export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
+  if (!orders || orders.length === 0) return new Map();
+
+  const token = isSyp
+    ? (process.env.SW_GAMES_SYP_TOKEN || 'yzhm54xr2dh6778klm34c5y21')
+    : (process.env.SW_GAMES_USD_TOKEN || 'i1zz8ajhxca9419asucqcmj6z6');
+
+  const idToOrder = new Map();
+  const allIds = new Set();
+
+  for (const o of orders) {
+    const ids = [
+      o.providerOrderId,
+      o.providerResponse?.data?.order?.order_number,
+      o.providerResponse?.order_number,
+      o.providerResponse?.data?.order?.uuid,
+      o.providerResponse?.uuid,
+      o.providerResponse?.data?.order?.id,
+      o.providerPayload?.params?.order_uuid,
+      o.providerPayload?.params?.uuid,
+      o.orderId,
+    ].filter(Boolean);
+
+    for (const id of ids) {
+      const s = String(id).trim();
+      allIds.add(s);
+      idToOrder.set(s, o);
+    }
+  }
+
+  if (allIds.size === 0) return new Map();
+
+  const results = new Map(); // order._id -> { status, rawData }
+
+  try {
+    const idsString = Array.from(allIds).join(',');
+    const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${idsString}`;
+    const res = await fetch(url, {
+      headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const list = Array.isArray(data?.data?.orders)
+        ? data.data.orders
+        : Array.isArray(data?.orders)
+        ? data.orders
+        : Array.isArray(data?.data)
+        ? data.data
+        : [];
+
+      for (const item of list) {
+        const itemKeys = [
+          item.order_number,
+          item.order_id,
+          item.id,
+          item.uuid,
+        ].filter(Boolean).map(String);
+
+        let matchedOrder = null;
+        for (const k of itemKeys) {
+          if (idToOrder.has(k)) {
+            matchedOrder = idToOrder.get(k);
+            break;
+          }
+        }
+
+        if (!matchedOrder && orders.length === 1) {
+          matchedOrder = orders[0];
+        }
+
+        if (matchedOrder) {
+          const raw = String(item.status || item.order_status || item.status_name || '').toLowerCase();
+          let resolvedStatus = 'processing';
+
+          if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted', 'تم', 'مكتمل'].includes(raw)) {
+            resolvedStatus = 'completed';
+          } else if (
+            ['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused', 'ملغي', 'فشل', 'مرفوض'].includes(raw) ||
+            item.error ||
+            item.ok === false
+          ) {
+            resolvedStatus = 'failed';
+          }
+
+          results.set(matchedOrder._id.toString(), {
+            status: resolvedStatus,
+            providerOrderNumber: item.order_number || matchedOrder.providerOrderId,
+            rawData: item,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Batch check SW Games orders error:', err);
+  }
+
+  // Fallback for any order not resolved by checkorders: use /order/{id}
+  for (const o of orders) {
+    const key = o._id.toString();
+    if (!results.has(key)) {
+      const singleId = o.providerOrderId || o.providerPayload?.params?.order_uuid || o.orderId;
+      if (singleId) {
+        try {
+          const singleUrl = `https://sw-games.net/api/fastapi/order/${singleId}`;
+          const singleRes = await fetch(singleUrl, {
+            headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+          });
+          if (singleRes.ok) {
+            const singleData = await singleRes.json();
+            const orderObj = singleData?.data?.order || singleData?.order;
+            if (orderObj) {
+              const raw = String(orderObj.status || '').toLowerCase();
+              let resolvedStatus = 'processing';
+              if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted'].includes(raw)) {
+                resolvedStatus = 'completed';
+              } else if (['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused'].includes(raw)) {
+                resolvedStatus = 'failed';
+              }
+              results.set(key, {
+                status: resolvedStatus,
+                providerOrderNumber: orderObj.order_number || o.providerOrderId,
+                rawData: orderObj,
+              });
+            }
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  return results;
 };
