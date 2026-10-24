@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Order } from './orders.model.js';
 import { User } from '../users/users.model.js';
 import { Transaction } from '../users/transactions.model.js';
@@ -5,8 +6,7 @@ import { Product } from '../products/products.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-
-import { dispatchProviderOrder } from './providerDispatch.service.js';
+import { dispatchProviderOrder, checkExternalOrderStatus } from './providerDispatch.service.js';
 
 export const executePurchase = async ({
   userId,
@@ -29,36 +29,43 @@ export const executePurchase = async ({
     throw new ApiError('الحساب غير نشط حالياً', HTTP_STATUS.FORBIDDEN);
   }
 
-  // 1. Fetch product to determine true base cost
+  // 1. Fetch exact product / package item
   let product = null;
-  let unitCost = 0;
+  let packageProduct = null;
   let finalProductName = productName || 'طلب شحن ألعاب';
   let finalCategory = category || 'ألعاب';
   let finalImage = image || '';
   let source = 'custom';
 
-  if (productId) {
-    product = await Product.findById(productId);
-    if (product) {
-      finalProductName = product.name;
-      finalCategory = product.category;
-      finalImage = product.image || finalImage;
-      source = product.source;
-      unitCost = product.originalPrice && product.originalPrice > 0 ? product.originalPrice : (product.price || 0);
-    }
+  if (packageId) {
+    packageProduct = await Product.findOne({
+      $or: [
+        { externalId: String(packageId) },
+        ...(mongoose.isValidObjectId(packageId) ? [{ _id: packageId }] : []),
+      ],
+    });
   }
 
-  if ((!unitCost || unitCost <= 0) && clientBasePrice !== undefined && clientBasePrice !== null) {
-    unitCost = Number(clientBasePrice) || 0;
+  if (productId) {
+    product = await Product.findById(productId);
+  }
+
+  const activeItem = packageProduct || product;
+
+  if (activeItem) {
+    finalProductName = activeItem.name || finalProductName;
+    finalCategory = activeItem.category || finalCategory;
+    finalImage = activeItem.image || finalImage;
+    source = activeItem.source || source;
   }
 
   // 1.1 Strict Currency & Source Matching Check (Lira vs Dollar isolation)
   const userCurrency = (user.currency || 'USD').toUpperCase();
   const isUserSyp = userCurrency === 'SYP' || userCurrency === 'ل.س';
   const isProductSyp =
-    product?.source === 'roya_syp' ||
-    product?.currency === 'ل.س' ||
-    (product?.currency || '').toUpperCase() === 'SYP' ||
+    activeItem?.source === 'roya_syp' ||
+    activeItem?.currency === 'ل.س' ||
+    (activeItem?.currency || '').toUpperCase() === 'SYP' ||
     currency === 'ل.س' ||
     (currency || '').toUpperCase() === 'SYP';
 
@@ -77,28 +84,51 @@ export const executePurchase = async ({
 
   const effectiveCurrency = isUserSyp ? 'ل.س' : '$';
 
-  const validQuantity = Math.max(1, Number(quantity) || 1);
-  const totalCost = Number((unitCost * validQuantity).toFixed(4));
-
-  // 2. Fetch current profit margin percentage from settings & product discount
+  // 2. Resolve true base cost and selling price
   const settings = await getSettings();
   const profitPercentage = settings.profitPercentage || 0;
-  const discountPercent = product?.discountPercent || 0;
+  const discountPercent = activeItem?.discountPercent || product?.discountPercent || 0;
 
-  // 3. User Price = cost + profit margin - discount
-  const normalPrice =
+  const baseCost =
+    activeItem?.originalPrice && activeItem.originalPrice > 0
+      ? activeItem.originalPrice
+      : activeItem?.sellingPrice && activeItem.sellingPrice > 0
+      ? activeItem.sellingPrice
+      : activeItem?.price || 0;
+
+  // Expected price with profit
+  const priceBeforeDiscount =
     profitPercentage > 0
-      ? Number((totalCost * (1 + profitPercentage / 100)).toFixed(4))
-      : totalCost;
+      ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+      : baseCost;
 
-  const totalUserPrice =
+  const calculatedSellingPrice =
     discountPercent > 0
-      ? Number((normalPrice * (1 - discountPercent / 100)).toFixed(4))
-      : normalPrice;
+      ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+      : priceBeforeDiscount;
 
+  // Unit selling price charged to user:
+  // Must respect the price displayed on the user's screen (e.g. 2.50)
+  let unitSellingPrice = Number(clientBasePrice) || 0;
+  if (unitSellingPrice <= 0) {
+    unitSellingPrice = calculatedSellingPrice > 0 ? calculatedSellingPrice : baseCost;
+  }
+
+  // Unit cost from provider
+  let unitCost = baseCost;
+  if (unitCost <= 0 && unitSellingPrice > 0) {
+    unitCost =
+      profitPercentage > 0
+        ? Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(4))
+        : unitSellingPrice;
+  }
+
+  const validQuantity = Math.max(1, Number(quantity) || 1);
+  const totalUserPrice = Number((unitSellingPrice * validQuantity).toFixed(4));
+  const totalCost = Number((unitCost * validQuantity).toFixed(4));
   const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));
 
-  // 4. Verify user balance
+  // 3. Verify user balance
   const currentBalance = user.balance || 0;
   if (currentBalance < totalUserPrice) {
     throw new ApiError(
@@ -107,7 +137,7 @@ export const executePurchase = async ({
     );
   }
 
-  // 5. Deduct user balance and update metrics
+  // 4. Deduct user balance and update metrics
   const previousBalance = currentBalance;
   const newBalance = Number((previousBalance - totalUserPrice).toFixed(4));
   user.balance = Math.max(0, newBalance);
@@ -115,21 +145,21 @@ export const executePurchase = async ({
   user.totalProfit = Number(((user.totalProfit || 0) + profit).toFixed(4));
   await user.save();
 
-  // 6. Generate unique order ID
+  // 5. Generate unique order ID
   const orderId = `ORD-${Date.now().toString().slice(-6)}${Math.floor(1000 + Math.random() * 9000)}`;
 
-  // 7. Dispatch order to external Provider API (SW Games / Brand1Card / Auto1Card)
+  // 6. Dispatch order to external Provider API (SW Games / Brand1Card / Auto1Card)
   const basePayload = {
-    externalId: product?.externalId || packageId,
+    externalId: activeItem?.externalId || packageId || product?.externalId,
     targetId: targetId || '',
-    costPrice: totalCost, // Base price sent to provider
+    costPrice: totalCost,
     quantity: validQuantity,
     extraFields,
   };
 
   let dispatchResult = {
     success: true,
-    status: 'completed',
+    status: 'processing',
     providerPayload: basePayload,
     providerResponse: null,
     providerOrderId: null,
@@ -137,7 +167,7 @@ export const executePurchase = async ({
 
   try {
     dispatchResult = await dispatchProviderOrder({
-      product,
+      product: activeItem || product,
       orderId,
       targetId,
       quantity: validQuantity,
@@ -148,14 +178,15 @@ export const executePurchase = async ({
     console.error('Provider dispatch exception:', dispErr);
     dispatchResult = {
       success: false,
-      status: 'processing',
+      status: 'failed',
       providerPayload: basePayload,
       providerResponse: { error: dispErr.message },
       providerOrderId: null,
+      errorMessage: dispErr.message,
     };
   }
 
-  // 8. Handle Provider Failure with Immediate Refund & Exact Error Reporting
+  // 7. Handle Provider Failure with Immediate Refund & Exact Error Reporting
   if (!dispatchResult.success) {
     // Revert user balance deduction immediately (Automatic Refund)
     user.balance = previousBalance;
@@ -167,7 +198,7 @@ export const executePurchase = async ({
     await Order.create({
       orderId,
       userId: user._id,
-      productId: product?._id || null,
+      productId: activeItem?._id || product?._id || null,
       productName: finalProductName,
       category: finalCategory,
       image: finalImage,
@@ -194,11 +225,11 @@ export const executePurchase = async ({
     );
   }
 
-  // 9. Create Order Record with full execution details (Successful Order)
+  // 8. Create Order Record with full execution details (Successful / Processing Order)
   const order = await Order.create({
     orderId,
     userId: user._id,
-    productId: product?._id || null,
+    productId: activeItem?._id || product?._id || null,
     productName: finalProductName,
     category: finalCategory,
     image: finalImage,
@@ -212,20 +243,20 @@ export const executePurchase = async ({
     profitPercentage,
     discountPercent,
     currency: effectiveCurrency,
-    status: dispatchResult.status || 'completed',
+    status: dispatchResult.status || 'processing',
     providerOrderId: dispatchResult.providerOrderId || '',
     providerPayload: dispatchResult.providerPayload || basePayload,
     providerResponse: dispatchResult.providerResponse || null,
   });
 
-  // 10. Create Transaction Record (Successful Purchase)
+  // 9. Create Transaction Record (Successful Purchase)
   const transaction = await Transaction.create({
     userId: user._id,
     type: 'purchase',
     currency: user.currency || 'USD',
-    amount: totalUserPrice, // What the user paid
-    costPrice: totalCost,   // Cost from provider
-    profit,                 // Profit earned
+    amount: totalUserPrice,
+    costPrice: totalCost,
+    profit,
     productName: finalProductName,
     targetId: targetId || '',
     orderId,
@@ -259,6 +290,77 @@ export const getAllOrdersAdmin = async (query = {}) => {
   return await Order.find(filter)
     .populate('userId', 'name email avatar balance')
     .sort({ createdAt: -1 });
+};
+
+export const checkSingleOrder = async (orderId) => {
+  const order = await Order.findOne({
+    $or: [{ orderId }, { _id: mongoose.isValidObjectId(orderId) ? orderId : null }],
+  });
+  if (!order) {
+    throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (order.status !== 'processing' && order.status !== 'pending') {
+    return { order, message: `الطلب بحالة ${order.status} حالياً ولا يحتاج فحص` };
+  }
+
+  const checkResult = await checkExternalOrderStatus(order);
+  if (checkResult.changed && checkResult.status !== order.status) {
+    order.status = checkResult.status;
+    if (checkResult.rawData) {
+      order.providerResponse = checkResult.rawData;
+    }
+
+    // If external status changed to failed, refund user automatically
+    if (checkResult.status === 'failed') {
+      const user = await User.findById(order.userId);
+      if (user) {
+        user.balance = Number(((user.balance || 0) + (order.userPrice || 0)).toFixed(4));
+        user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - (order.userPrice || 0)).toFixed(4));
+        user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
+        await user.save();
+      }
+    }
+    await order.save();
+  }
+
+  return {
+    order: order.toJSON(),
+    updated: checkResult.changed,
+    status: order.status,
+  };
+};
+
+export const syncPendingOrders = async () => {
+  const pendingOrders = await Order.find({
+    status: { $in: ['processing', 'pending'] },
+    providerOrderId: { $exists: true, $ne: '' },
+  }).limit(50);
+
+  let updatedCount = 0;
+  for (const order of pendingOrders) {
+    try {
+      const checkResult = await checkExternalOrderStatus(order);
+      if (checkResult.changed && checkResult.status !== order.status) {
+        order.status = checkResult.status;
+        if (checkResult.status === 'failed') {
+          const user = await User.findById(order.userId);
+          if (user) {
+            user.balance = Number(((user.balance || 0) + (order.userPrice || 0)).toFixed(4));
+            user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - (order.userPrice || 0)).toFixed(4));
+            user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
+            await user.save();
+          }
+        }
+        await order.save();
+        updatedCount++;
+      }
+    } catch (e) {
+      console.error(`Error syncing order ${order.orderId}:`, e);
+    }
+  }
+
+  return { checkedCount: pendingOrders.length, updatedCount };
 };
 
 export const getFinancialStatsAdmin = async () => {

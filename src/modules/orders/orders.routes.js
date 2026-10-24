@@ -1,5 +1,12 @@
 import { Router } from 'express';
-import { purchase, getMyOrders, getAdminOrders, getFinancialStats } from './orders.controller.js';
+import {
+  purchase,
+  getMyOrders,
+  getAdminOrders,
+  getFinancialStats,
+  checkOrderStatus,
+  syncOrders,
+} from './orders.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
 
@@ -12,5 +19,7 @@ router.get('/my-orders', authenticate, getMyOrders);
 // Admin financial orders and statistics
 router.get('/admin', authenticate, authorize(ROLES.ADMIN), getAdminOrders);
 router.get('/admin/stats', authenticate, authorize(ROLES.ADMIN), getFinancialStats);
+router.post('/admin/sync-pending', authenticate, authorize(ROLES.ADMIN), syncOrders);
+router.post('/:orderId/check-status', authenticate, checkOrderStatus);
 
 export default router;

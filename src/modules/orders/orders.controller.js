@@ -26,3 +26,14 @@ export const getFinancialStats = asyncHandler(async (req, res) => {
   const result = await ordersService.getFinancialStatsAdmin();
   return ApiResponse.success(res, result, 'Financial statistics fetched successfully');
 });
+
+export const checkOrderStatus = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  const result = await ordersService.checkSingleOrder(orderId);
+  return ApiResponse.success(res, result, 'تم فحص حالة الطلب من المزود بنجاح');
+});
+
+export const syncOrders = asyncHandler(async (req, res) => {
+  const result = await ordersService.syncPendingOrders();
+  return ApiResponse.success(res, result, `تم تحديث ${result.updatedCount} طلب من أصل ${result.checkedCount}`);
+});
