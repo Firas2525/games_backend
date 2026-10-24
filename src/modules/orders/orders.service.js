@@ -278,6 +278,57 @@ export const executePurchase = async ({
 };
 
 export const getUserOrders = async (userId) => {
+  // 1. Check & Sync any pending/processing orders from external providers before returning to user
+  const pendingOrders = await Order.find({
+    userId,
+    status: { $in: ['processing', 'pending'] },
+    providerOrderId: { $exists: true, $ne: '' },
+  });
+
+  if (pendingOrders.length > 0) {
+    for (const order of pendingOrders) {
+      try {
+        const checkResult = await checkExternalOrderStatus(order);
+        if (checkResult.changed && checkResult.status !== order.status) {
+          order.status = checkResult.status;
+          if (checkResult.rawData) {
+            order.providerResponse = checkResult.rawData;
+          }
+          if (checkResult.status === 'failed' && !order.refunded) {
+            const user = await User.findById(userId);
+            if (user) {
+              const refundAmount = Number((order.userPrice || 0).toFixed(4));
+              const prevBal = user.balance || 0;
+              user.balance = Number((prevBal + refundAmount).toFixed(4));
+              user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
+              user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
+              await user.save();
+
+              order.refunded = true;
+
+              // Record refund transaction
+              await Transaction.create({
+                userId,
+                type: 'refund',
+                currency: user.currency || 'USD',
+                amount: refundAmount,
+                productName: order.productName,
+                targetId: order.targetId || '',
+                orderId: order.orderId,
+                previousBalance: prevBal,
+                newBalance: user.balance,
+                note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
+              });
+            }
+          }
+          await order.save();
+        }
+      } catch (e) {
+        console.error(`Error checking order ${order.orderId}:`, e);
+      }
+    }
+  }
+
   return await Order.find({ userId }).sort({ createdAt: -1 });
 };
 
@@ -312,13 +363,30 @@ export const checkSingleOrder = async (orderId) => {
     }
 
     // If external status changed to failed, refund user automatically
-    if (checkResult.status === 'failed') {
+    if (checkResult.status === 'failed' && !order.refunded) {
       const user = await User.findById(order.userId);
       if (user) {
-        user.balance = Number(((user.balance || 0) + (order.userPrice || 0)).toFixed(4));
-        user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - (order.userPrice || 0)).toFixed(4));
+        const refundAmount = Number((order.userPrice || 0).toFixed(4));
+        const prevBal = user.balance || 0;
+        user.balance = Number((prevBal + refundAmount).toFixed(4));
+        user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
         user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
         await user.save();
+
+        order.refunded = true;
+
+        await Transaction.create({
+          userId: order.userId,
+          type: 'refund',
+          currency: user.currency || 'USD',
+          amount: refundAmount,
+          productName: order.productName,
+          targetId: order.targetId || '',
+          orderId: order.orderId,
+          previousBalance: prevBal,
+          newBalance: user.balance,
+          note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
+        });
       }
     }
     await order.save();
@@ -343,13 +411,33 @@ export const syncPendingOrders = async () => {
       const checkResult = await checkExternalOrderStatus(order);
       if (checkResult.changed && checkResult.status !== order.status) {
         order.status = checkResult.status;
-        if (checkResult.status === 'failed') {
+        if (checkResult.rawData) {
+          order.providerResponse = checkResult.rawData;
+        }
+        if (checkResult.status === 'failed' && !order.refunded) {
           const user = await User.findById(order.userId);
           if (user) {
-            user.balance = Number(((user.balance || 0) + (order.userPrice || 0)).toFixed(4));
-            user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - (order.userPrice || 0)).toFixed(4));
+            const refundAmount = Number((order.userPrice || 0).toFixed(4));
+            const prevBal = user.balance || 0;
+            user.balance = Number((prevBal + refundAmount).toFixed(4));
+            user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
             user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
             await user.save();
+
+            order.refunded = true;
+
+            await Transaction.create({
+              userId: order.userId,
+              type: 'refund',
+              currency: user.currency || 'USD',
+              amount: refundAmount,
+              productName: order.productName,
+              targetId: order.targetId || '',
+              orderId: order.orderId,
+              previousBalance: prevBal,
+              newBalance: user.balance,
+              note: `استرجاع رصيد تلقائي لفشل الطلب: ${order.productName} (#${order.orderId})`,
+            });
           }
         }
         await order.save();

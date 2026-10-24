@@ -429,18 +429,25 @@ export const checkExternalOrderStatus = async (order) => {
       });
       if (res.ok) {
         const data = await res.json();
-        // Check list of returned orders
         const ordersList = Array.isArray(data) ? data : data?.data || data?.orders || [];
         const item = ordersList.find((o) => String(o.order_id || o.order_number || o.id) === String(providerOrderId)) || ordersList[0];
         if (item) {
           const raw = String(item.status || item.order_status || item.status_name || '').toLowerCase();
-          if (['1', 'true', 'completed', 'done', 'success', 'accepted'].includes(raw)) {
+          if (['1', 'true', 'completed', 'done', 'success', 'accepted', 'تم', 'منجز', 'مكتمل'].includes(raw)) {
             return { changed: true, status: 'completed', rawData: item };
           }
-          if (['2', 'failed', 'fail', 'error', 'rejected', 'refused'].includes(raw)) {
+          if (
+            ['2', '3', 'failed', 'fail', 'error', 'rejected', 'refused', 'cancelled', 'canceled', 'cancel', 'ملغي', 'فشل', 'مرفوض'].includes(raw) ||
+            item.error ||
+            item.ok === false
+          ) {
             return { changed: true, status: 'failed', rawData: item };
           }
+        } else if (data?.ok === false || data?.error) {
+          return { changed: true, status: 'failed', rawData: data };
         }
+      } else if (res.status === 400 || res.status === 401 || res.status === 404) {
+        return { changed: true, status: 'failed', rawData: { error: `HTTP ${res.status}` } };
       }
     }
     // 2. Brand One Card check
@@ -458,10 +465,10 @@ export const checkExternalOrderStatus = async (order) => {
         const item = list.find((o) => String(o.order_id) === String(providerOrderId)) || list[0];
         if (item) {
           const st = String(item.status || '').toLowerCase();
-          if (st === 'accept') {
+          if (['accept', 'completed', 'done', 'success'].includes(st)) {
             return { changed: true, status: 'completed', rawData: item };
           }
-          if (st === 'reject') {
+          if (['reject', 'rejected', 'failed', 'error', 'canceled'].includes(st) || item.error) {
             return { changed: true, status: 'failed', rawData: item };
           }
         }
