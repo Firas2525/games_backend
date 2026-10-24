@@ -236,7 +236,7 @@ export const dispatchProviderOrder = async ({
 
   return {
     success: isSuccess,
-    status: isSuccess ? 'completed' : 'processing', // If error, keep in processing so admin can re-dispatch or review
+    status: isSuccess ? 'completed' : 'failed',
     providerPayload: { targetUrl, params, headers: sanitizedHeaders },
     providerResponse: responseData,
     providerOrderId: providerOrderId ? String(providerOrderId) : orderUuid,

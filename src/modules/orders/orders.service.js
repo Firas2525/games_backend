@@ -155,7 +155,46 @@ export const executePurchase = async ({
     };
   }
 
-  // 8. Create Order Record with full execution details
+  // 8. Handle Provider Failure with Immediate Refund & Exact Error Reporting
+  if (!dispatchResult.success) {
+    // Revert user balance deduction immediately (Automatic Refund)
+    user.balance = previousBalance;
+    user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - totalUserPrice).toFixed(4));
+    user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - profit).toFixed(4));
+    await user.save();
+
+    // Create Order Record with 'failed' status for transparency
+    await Order.create({
+      orderId,
+      userId: user._id,
+      productId: product?._id || null,
+      productName: finalProductName,
+      category: finalCategory,
+      image: finalImage,
+      targetId: targetId || '',
+      extraFields,
+      quantity: validQuantity,
+      source,
+      costPrice: totalCost,
+      userPrice: totalUserPrice,
+      profit: 0,
+      profitPercentage,
+      discountPercent,
+      currency: effectiveCurrency,
+      status: 'failed',
+      providerOrderId: dispatchResult.providerOrderId || '',
+      providerPayload: dispatchResult.providerPayload || basePayload,
+      providerResponse: dispatchResult.providerResponse || null,
+    });
+
+    const errorDetail = dispatchResult.errorMessage || 'رفض مزود الخدمة الطلب';
+    throw new ApiError(
+      `تعذر تنفيذ الشحن من المزود: ${errorDetail}. لم يتم خصم أي رصيد من حسابك وتمت إعادة الرصيد لمحفظتك.`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  // 9. Create Order Record with full execution details (Successful Order)
   const order = await Order.create({
     orderId,
     userId: user._id,
@@ -179,7 +218,7 @@ export const executePurchase = async ({
     providerResponse: dispatchResult.providerResponse || null,
   });
 
-  // 9. Create Transaction Record
+  // 10. Create Transaction Record (Successful Purchase)
   const transaction = await Transaction.create({
     userId: user._id,
     type: 'purchase',
