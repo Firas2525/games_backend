@@ -26,6 +26,23 @@ export const authenticate = async (req, res, next) => {
   }
 };
 
+export const optionalAuthenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, ENV.JWT_SECRET);
+      const user = await User.findById(decoded.id);
+      if (user && user.isActive) {
+        req.user = user;
+      }
+    }
+  } catch (_) {
+    // Guest or expired token, proceed without error
+  }
+  next();
+};
+
 export const authorize = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {

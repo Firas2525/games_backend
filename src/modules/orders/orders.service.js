@@ -50,6 +50,31 @@ export const executePurchase = async ({
     unitCost = Number(clientBasePrice) || 0;
   }
 
+  // 1.1 Strict Currency & Source Matching Check (Lira vs Dollar isolation)
+  const userCurrency = (user.currency || 'USD').toUpperCase();
+  const isUserSyp = userCurrency === 'SYP' || userCurrency === 'ل.س';
+  const isProductSyp =
+    product?.source === 'roya_syp' ||
+    product?.currency === 'ل.س' ||
+    (product?.currency || '').toUpperCase() === 'SYP' ||
+    currency === 'ل.س' ||
+    (currency || '').toUpperCase() === 'SYP';
+
+  if (isUserSyp && !isProductSyp) {
+    throw new ApiError(
+      'عذراً، حسابك بالليرة السورية ولا يمكنك شراء منتجات من مصدر الدولار ($)',
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+  if (!isUserSyp && isProductSyp) {
+    throw new ApiError(
+      'عذراً، حسابك بالدولار ولا يمكنك شراء منتجات من مصدر الليرة السورية (ل.س)',
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  const effectiveCurrency = isUserSyp ? 'ل.س' : '$';
+
   const validQuantity = Math.max(1, Number(quantity) || 1);
   const totalCost = Number((unitCost * validQuantity).toFixed(4));
 
@@ -75,7 +100,7 @@ export const executePurchase = async ({
   const currentBalance = user.balance || 0;
   if (currentBalance < totalUserPrice) {
     throw new ApiError(
-      `الرصيد غير كافٍ. رصيدك الحالي هو ${currentBalance.toFixed(2)}${currency} والمطلوب ${totalUserPrice.toFixed(2)}${currency}`,
+      `الرصيد غير كافٍ. رصيدك الحالي هو ${currentBalance.toFixed(2)} ${effectiveCurrency} والمطلوب ${totalUserPrice.toFixed(2)} ${effectiveCurrency}`,
       HTTP_STATUS.BAD_REQUEST
     );
   }
@@ -116,7 +141,7 @@ export const executePurchase = async ({
     profit,
     profitPercentage,
     discountPercent,
-    currency,
+    currency: effectiveCurrency,
     status: 'completed',
     providerPayload,
   });

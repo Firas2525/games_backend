@@ -44,8 +44,18 @@ export const updateCategoryGroup = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'تم تحديث تصنيف جميع منتجات هذه الفئة بنجاح');
 });
 
+const extractUserCurrency = (req) => {
+  return (
+    req.user?.currency ||
+    req.query.currency ||
+    req.headers['x-user-currency'] ||
+    null
+  );
+};
+
 export const getCategories = asyncHandler(async (req, res) => {
-  const result = await productsService.getAllCategories();
+  const userCurrency = extractUserCurrency(req);
+  const result = await productsService.getAllCategories(userCurrency);
   return ApiResponse.success(res, result, 'Categories fetched successfully');
 });
 
@@ -72,7 +82,8 @@ export const bulkUpdateCategory = asyncHandler(async (req, res) => {
 
 // Sub-Category handlers
 export const getSubCategoriesList = asyncHandler(async (req, res) => {
-  const result = await productsService.getSubCategories(req.query.mainCategory);
+  const userCurrency = extractUserCurrency(req);
+  const result = await productsService.getSubCategories(req.query.mainCategory, userCurrency);
   return ApiResponse.success(res, result, 'Subcategories fetched successfully');
 });
 
@@ -97,12 +108,14 @@ export const bulkAssignSubCategory = asyncHandler(async (req, res) => {
 });
 
 export const getUserList = asyncHandler(async (req, res) => {
-  const result = await productsService.getUserProducts(req.query);
+  const userCurrency = extractUserCurrency(req);
+  const result = await productsService.getUserProducts(req.query, userCurrency);
   return ApiResponse.success(res, result, 'User products fetched successfully');
 });
 
 export const getDetails = asyncHandler(async (req, res) => {
-  const result = await productsService.getProductDetails(req.params.id);
+  const userCurrency = extractUserCurrency(req);
+  const result = await productsService.getProductDetails(req.params.id, userCurrency);
   return ApiResponse.success(res, result, 'Product details fetched successfully');
 });
 

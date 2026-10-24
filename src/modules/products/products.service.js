@@ -508,14 +508,53 @@ export const ensureDefaultCategories = async () => {
   }
 };
 
-// 6.0 Get all categories with product counts
-export const getAllCategories = async () => {
+// Helper: Build query filter matching user currency (Lira vs Dollar separation)
+export const buildCurrencyProductFilter = (currencyStr) => {
+  if (!currencyStr) return null;
+  const c = String(currencyStr).trim().toUpperCase();
+  if (c === 'SYP' || c === 'ل.س' || c === 'ليرة' || c === 'SYRIAN POUND') {
+    // SYP USER: Strict isolation - NO Dollar source or Dollar currency allowed!
+    return {
+      $and: [
+        { source: { $nin: ['roya_usd', 'sw_games'] } },
+        { currency: { $nin: ['$', 'USD', 'usd'] } },
+        {
+          $or: [
+            { source: 'roya_syp' },
+            { currency: { $in: ['ل.س', 'SYP', 'syp'] } },
+            { sourceName: { $regex: 'ليرة', $options: 'i' } },
+          ],
+        },
+      ],
+    };
+  }
+  if (c === 'USD' || c === '$' || c === 'دولار') {
+    // USD USER: Strict isolation - NO Lira source or Lira currency allowed!
+    return {
+      $and: [
+        { source: { $ne: 'roya_syp' } },
+        { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
+        { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+      ],
+    };
+  }
+  return null;
+};
+
+// 6.0 Get all categories with product counts (filtered by user currency)
+export const getAllCategories = async (userCurrency = null) => {
   await ensureDefaultCategories();
   const categories = await Category.find({ isVisible: true }).sort({ sortOrder: 1, createdAt: 1 });
 
+  const currencyFilter = buildCurrencyProductFilter(userCurrency);
+  const matchFilter = { isAvailable: { $ne: false }, isVisible: { $ne: false } };
+  if (currencyFilter) {
+    matchFilter.$and = [currencyFilter];
+  }
+
   // Count active products for each category
   const productCounts = await Product.aggregate([
-    { $match: { isAvailable: { $ne: false }, isVisible: { $ne: false } } },
+    { $match: matchFilter },
     { $group: { _id: '$mainCategory', count: { $sum: 1 } } },
   ]);
 
@@ -667,7 +706,7 @@ export const updateCategoryGroup = async (categoryName, mainCategory) => {
 };
 
 // 6.3 Sub-Categories Management (Groups within a Main Category)
-export const getSubCategories = async (mainCategory) => {
+export const getSubCategories = async (mainCategory, userCurrency = null) => {
   const filter = { isVisible: true };
   if (mainCategory && mainCategory !== 'all') {
     filter.mainCategory = mainCategory;
@@ -675,11 +714,20 @@ export const getSubCategories = async (mainCategory) => {
   const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: -1 }).lean();
 
   const subCategoryIds = subCategories.map((s) => s._id);
-  const products = await Product.find({
+  const productMatch = {
     subCategoryId: { $in: subCategoryIds },
     isAvailable: { $ne: false },
     isVisible: { $ne: false },
-  }).select('id _id name image price originalPrice currency isAvailable isVisible subCategoryId subCategoryName').lean();
+  };
+
+  const currencyFilter = buildCurrencyProductFilter(userCurrency);
+  if (currencyFilter) {
+    productMatch.$and = [currencyFilter];
+  }
+
+  const products = await Product.find(productMatch).select(
+    'id _id name image price originalPrice currency isAvailable isVisible subCategoryId subCategoryName source'
+  ).lean();
 
   const productsBySubId = {};
   for (const p of products) {
@@ -701,7 +749,7 @@ export const getSubCategories = async (mainCategory) => {
       productCount: scProducts.length,
       products: scProducts,
       startingPrice,
-      currency: scProducts.length > 0 ? scProducts[0].currency : '$',
+      currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
     };
   });
 };
@@ -837,25 +885,34 @@ export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCate
 };
 
 // 7. User: Get visible products grouped by Category (All active products visible by default)
-export const getUserProducts = async (query = {}) => {
-  const filter = {
-    isAvailable: { $ne: false },
-    isVisible: { $ne: false }, // Only hide if explicitly marked false
-  };
+export const getUserProducts = async (query = {}, userCurrency = null) => {
+  const andClauses = [
+    { isAvailable: { $ne: false } },
+    { isVisible: { $ne: false } },
+  ];
+
+  const currencyFilter = buildCurrencyProductFilter(userCurrency || query.currency);
+  if (currencyFilter) {
+    andClauses.push(currencyFilter);
+  }
 
   if (query.category && query.category !== 'all') {
-    filter.category = query.category;
+    andClauses.push({ category: query.category });
   }
   if (query.mainCategory && query.mainCategory !== 'all') {
-    filter.mainCategory = query.mainCategory;
+    andClauses.push({ mainCategory: query.mainCategory });
   }
   if (query.search) {
-    filter.$or = [
-      { name: { $regex: query.search, $options: 'i' } },
-      { category: { $regex: query.search, $options: 'i' } },
-      { subCategoryName: { $regex: query.search, $options: 'i' } },
-    ];
+    andClauses.push({
+      $or: [
+        { name: { $regex: query.search, $options: 'i' } },
+        { category: { $regex: query.search, $options: 'i' } },
+        { subCategoryName: { $regex: query.search, $options: 'i' } },
+      ],
+    });
   }
+
+  const filter = andClauses.length === 1 ? andClauses[0] : { $and: andClauses };
 
   const settings = await getSettings();
   const profitPercentage = settings.profitPercentage || 0;
@@ -887,10 +944,10 @@ export const getUserProducts = async (query = {}) => {
     };
   });
 
-  // Fetch subcategories for this view if mainCategory provided
+  // Fetch subcategories for this view if mainCategory provided (with user currency)
   let subCategories = [];
   try {
-    subCategories = await getSubCategories(query.mainCategory || 'all');
+    subCategories = await getSubCategories(query.mainCategory || 'all', userCurrency);
   } catch (_) {}
 
   // Group by category for a cleaner store layout
@@ -911,7 +968,7 @@ export const getUserProducts = async (query = {}) => {
 };
 
 // 8. Get Product Details (Packages & Pricing modeled after legacy site)
-export const getProductDetails = async (id) => {
+export const getProductDetails = async (id, userCurrency = null) => {
   const product = await Product.findById(id).lean();
   if (!product) {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
@@ -928,6 +985,7 @@ export const getProductDetails = async (id) => {
   ) {
     const categoryQuery = {
       category: product.category,
+      source: product.source, // Keep strictly within the exact source & currency
       isAvailable: { $ne: false },
     };
 

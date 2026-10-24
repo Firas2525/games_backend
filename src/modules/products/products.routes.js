@@ -21,19 +21,19 @@ import {
   getDetails,
   updateDiscount,
 } from './products.controller.js';
-import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
+import { authenticate, authorize, optionalAuthenticate } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
 
 const router = Router();
 
-// User / Public routes
-router.get('/', getUserList);
-router.get('/categories', getCategories);
-router.get('/subcategories', getSubCategoriesList);
+// User / Public routes (with optional authentication to detect user currency)
+router.get('/', optionalAuthenticate, getUserList);
+router.get('/categories', optionalAuthenticate, getCategories);
+router.get('/subcategories', optionalAuthenticate, getSubCategoriesList);
 router.get('/stats', getStats);
 router.get('/sync-now', triggerSync);
 router.post('/sync-now', triggerSync);
-router.get('/:id/details', getDetails);
+router.get('/:id/details', optionalAuthenticate, getDetails);
 
 // Admin-only protected routes
 router.use(authenticate, authorize(ROLES.ADMIN));
