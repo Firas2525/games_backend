@@ -20,9 +20,51 @@ const sanitizeData = (data) => {
   }
 };
 
+const truncateForLog = (data) => {
+  if (!data) return data;
+  if (typeof data === 'object') {
+    // If it's an array of items (e.g. list of products or users), summarize it
+    if (Array.isArray(data)) {
+      return {
+        _summary: `قائمة تحتوي على ${data.length} عنصر`,
+        sample: data.slice(0, 2),
+      };
+    }
+    // If it's a paginated wrapper like { success: true, data: [...] }
+    if (data.data && Array.isArray(data.data)) {
+      return {
+        ...data,
+        data: {
+          _summary: `قائمة تحتوي على ${data.data.length} عنصر`,
+          sample: data.data.slice(0, 2),
+        },
+      };
+    }
+    // If stringified length > 15KB, truncate
+    try {
+      const str = JSON.stringify(data);
+      if (str.length > 15000) {
+        return {
+          _truncated: true,
+          preview: str.slice(0, 2000),
+          totalLength: str.length,
+        };
+      }
+    } catch (_) {}
+  }
+  return data;
+};
+
 export const auditLogMiddleware = (req, res, next) => {
-  // Skip non-API routes or noisy endpoints if needed
-  if (!req.originalUrl || req.originalUrl.includes('/favicon.ico')) {
+  const url = req.originalUrl || req.url || '';
+
+  // Skip non-API routes, health checks, or logs endpoint itself to prevent recursion and log bombs
+  if (
+    !url ||
+    url.includes('/favicon.ico') ||
+    url.includes('/health') ||
+    url.includes('/logs')
+  ) {
     return next();
   }
 
@@ -33,7 +75,11 @@ export const auditLogMiddleware = (req, res, next) => {
   res.send = function (body) {
     try {
       if (typeof body === 'string') {
-        responseBody = JSON.parse(body);
+        if (body.length < 50000) {
+          responseBody = JSON.parse(body);
+        } else {
+          responseBody = { _preview: body.slice(0, 1000), length: body.length };
+        }
       } else {
         responseBody = body;
       }
@@ -59,7 +105,7 @@ export const auditLogMiddleware = (req, res, next) => {
       const sanitizedHeaders = sanitizeData(req.headers);
       const sanitizedBody = sanitizeData(req.body);
       const sanitizedQuery = sanitizeData(req.query);
-      const sanitizedRes = sanitizeData(responseBody);
+      const sanitizedRes = sanitizeData(truncateForLog(responseBody));
 
       let errorMessage = '';
       if (!isSuccess && sanitizedRes && typeof sanitizedRes === 'object') {
