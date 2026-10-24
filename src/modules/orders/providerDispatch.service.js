@@ -39,10 +39,22 @@ export const dispatchProviderOrder = async ({
     const isSyp = source === 'roya_syp';
     const token = isSyp
       ? (process.env.SW_GAMES_SYP_TOKEN || 'yzhm54xr2dh6778klm34c5y21')
-      : (process.env.SW_GAMES_USD_TOKEN || 'a34t93478ghc56249g309m47');
+      : (process.env.SW_GAMES_USD_TOKEN || 'i1zz8ajhxca9419asucqcmj6z6');
 
     providerName = isSyp ? 'roya_syp (رؤيا ليرة)' : 'roya_usd (رؤيا دولار)';
-    const queryString = new URLSearchParams(params).toString();
+    // In SW Games, both 'uuid' and 'order_uuid' are sent, plus 'qty'
+    const swParams = {
+      ...params,
+      uuid: orderUuid,
+      order_uuid: orderUuid,
+      qty: quantity,
+    };
+    if (targetId) {
+      swParams.playerId = targetId;
+      swParams.Player_ID = targetId;
+      swParams.player_id = targetId;
+    }
+    const queryString = new URLSearchParams(swParams).toString();
     targetUrl = `https://sw-games.net/api/fastapi/requestorder/${externalId}/params?${queryString}`;
     headers = {
       apiToken: token,
@@ -56,7 +68,17 @@ export const dispatchProviderOrder = async ({
       process.env.BRAND1CARD_API_TOKEN ||
       '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
     providerName = 'brand1card (براند ون كارد)';
-    const queryString = new URLSearchParams(params).toString();
+    const brandParams = {
+      ...params,
+      order_uuid: orderUuid,
+      qty: quantity,
+    };
+    if (targetId) {
+      brandParams.playerId = targetId;
+      brandParams.Player_ID = targetId;
+      brandParams.player_id = targetId;
+    }
+    const queryString = new URLSearchParams(brandParams).toString();
     targetUrl = `https://api.brand-one-card.com/client/api/newOrder/${externalId}/params?${queryString}`;
     headers = {
       'api-token': token,
@@ -144,21 +166,34 @@ export const dispatchProviderOrder = async ({
 
     // Check if provider accepted the order
     if (res.ok) {
-      if (responseData && (responseData.status === 'ERROR' || responseData.error || responseData.ok === false)) {
+      const isReject =
+        responseData &&
+        (responseData.status === 'ERROR' ||
+          responseData.status === 'reject' ||
+          responseData.data?.status === 'reject' ||
+          responseData.ok === false ||
+          responseData.error);
+
+      if (isReject) {
         isSuccess = false;
-        errorMessage = responseData.msg || responseData.message || responseData.error || 'خطأ من مزود الخدمة';
+        errorMessage =
+          responseData.msg ||
+          responseData.message ||
+          responseData.error ||
+          responseData.data?.message ||
+          'رفض مزود الخدمة تنفيذ الطلب';
       } else {
         isSuccess = true;
       }
     } else {
       isSuccess = false;
-      errorMessage = `Provider HTTP Error ${statusCode}: ${responseData?.msg || responseData?.message || text.slice(0, 200)}`;
+      errorMessage = `خطأ استجابة المزود (${statusCode}): ${responseData?.msg || responseData?.message || responseData?.error || text.slice(0, 200)}`;
     }
   } catch (err) {
     statusCode = 504;
     isSuccess = false;
-    errorMessage = `Exception during provider dispatch: ${err.message}`;
-    responseData = { error: err.message, stack: err.stack };
+    errorMessage = `تعذر الاتصال بالمزود: ${err.message}`;
+    responseData = { error: err.message };
   }
 
   const durationMs = Date.now() - startTime;

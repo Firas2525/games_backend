@@ -165,6 +165,7 @@ export const executePurchase = async ({
     image: finalImage,
     targetId: targetId || '',
     extraFields,
+    quantity: validQuantity,
     source,
     costPrice: totalCost,
     userPrice: totalUserPrice,

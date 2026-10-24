@@ -44,6 +44,11 @@ const orderSchema = new mongoose.Schema(
       type: String,
       default: 'custom',
     },
+    quantity: {
+      type: Number,
+      required: true,
+      default: 1,
+    },
     // Financial details
     costPrice: {
       type: Number,
