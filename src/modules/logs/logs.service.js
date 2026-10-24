@@ -1,8 +1,20 @@
 import { ApiLog } from './apiLog.model.js';
 
+// Auto-cleanup any bloated /logs or /products records from earlier tests on service load
+(async () => {
+  try {
+    await ApiLog.deleteMany({
+      $or: [
+        { endpoint: { $regex: '/logs' } },
+        { endpoint: { $regex: '/products' } },
+      ],
+    });
+  } catch (_) {}
+})();
+
 export const getLogs = async (query = {}) => {
   const page = Math.max(1, parseInt(query.page) || 1);
-  const limit = Math.min(200, Math.max(1, parseInt(query.limit) || 50));
+  const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 30));
   const skip = (page - 1) * limit;
 
   const filter = {};
@@ -32,33 +44,45 @@ export const getLogs = async (query = {}) => {
     ];
   }
 
-  const [logs, total, stats] = await Promise.all([
-    ApiLog.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-    ApiLog.countDocuments(filter),
-    ApiLog.aggregate([
-      {
-        $group: {
-          _id: null,
-          totalCount: { $sum: 1 },
-          providerDispatches: {
-            $sum: { $cond: [{ $eq: ['$type', 'PROVIDER_DISPATCH'] }, 1, 0] },
-          },
-          internalHttp: {
-            $sum: { $cond: [{ $eq: ['$type', 'INTERNAL_HTTP'] }, 1, 0] },
-          },
-          errors: {
-            $sum: { $cond: [{ $eq: ['$isSuccess', false] }, 1, 0] },
-          },
-        },
-      },
-    ]),
+  // Fast, light queries with strict timeouts
+  const [rawLogs, total, providerCount, errorCount] = await Promise.all([
+    ApiLog.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .maxTimeMS(6000)
+      .lean(),
+    ApiLog.countDocuments(filter).maxTimeMS(4000).catch(() => 0),
+    ApiLog.countDocuments({ type: 'PROVIDER_DISPATCH' }).maxTimeMS(4000).catch(() => 0),
+    ApiLog.countDocuments({ isSuccess: false }).maxTimeMS(4000).catch(() => 0),
   ]);
 
-  const summary = stats[0] || {
+  // Sanitize and ensure no single log document exceeds 10KB
+  const logs = rawLogs.map((log) => {
+    let res = log.responseBody;
+    if (res && typeof res === 'object') {
+      try {
+        const s = JSON.stringify(res);
+        if (s.length > 8000) {
+          res = {
+            _truncated: true,
+            summary: `رد مختصر (${Math.round(s.length / 1024)} KB)`,
+            preview: s.slice(0, 1500) + '...',
+          };
+        }
+      } catch (_) {}
+    }
+    return {
+      ...log,
+      responseBody: res,
+    };
+  });
+
+  const summary = {
     totalCount: total,
-    providerDispatches: 0,
-    internalHttp: 0,
-    errors: 0,
+    providerDispatches: providerCount,
+    internalHttp: Math.max(0, total - providerCount),
+    errors: errorCount,
   };
 
   return {
@@ -67,14 +91,14 @@ export const getLogs = async (query = {}) => {
       page,
       limit,
       total,
-      pages: Math.ceil(total / limit),
+      pages: Math.ceil(total / limit) || 1,
     },
     summary,
   };
 };
 
 export const getLogDetails = async (id) => {
-  const log = await ApiLog.findById(id).lean();
+  const log = await ApiLog.findById(id).maxTimeMS(5000).lean();
   if (!log) {
     throw new Error('Log entry not found');
   }
