@@ -13,6 +13,18 @@ import { getSettings } from '../settings/settings.service.js';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+/**
+ * Accurately formats and preserves smart price precision:
+ * - If price >= 1: formats up to 4 decimal places
+ * - If price < 1: preserves full precision up to 8 decimal places so micro-prices (e.g. 0.00006511)
+ *   are NEVER rounded to 0.0001, eliminating price calculation errors when multiplied by large quantities.
+ */
+export const calcSmartPrice = (val) => {
+  const n = Number(val) || 0;
+  if (n <= 0) return 0;
+  return n >= 1 ? Number(n.toFixed(4)) : Number(n.toFixed(8));
+};
+
 // 1. Fetch from SW Games USD Account (رؤيا دولار - ROYA_USD)
 export const fetchSwGamesUsd = async () => {
   try {
@@ -343,11 +355,11 @@ export const getAdminProducts = async (query = {}) => {
   const mappedProducts = products.map((p) => {
     const baseCost = p.originalPrice && p.originalPrice > 0 ? p.originalPrice : (p.price || 0);
     const calculatedPrice = profitPercentage > 0
-      ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+      ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
       : baseCost;
     const discountPercent = p.discountPercent || 0;
     const finalPrice = discountPercent > 0
-      ? Number((calculatedPrice * (1 - discountPercent / 100)).toFixed(4))
+      ? calcSmartPrice(calculatedPrice * (1 - discountPercent / 100))
       : calculatedPrice;
     return {
       ...p,
@@ -928,12 +940,12 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
         : doc.originalPrice || 0;
     const priceBeforeDiscount =
       profitPercentage > 0
-        ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+        ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
         : baseCost;
     const discountPercent = doc.discountPercent || 0;
     const finalPrice =
       discountPercent > 0
-        ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+        ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
         : priceBeforeDiscount;
     return {
       ...doc,
@@ -1027,13 +1039,13 @@ export const getProductDetails = async (id, userCurrency = null) => {
 
       const priceBeforeDiscount =
         profitPercentage > 0
-          ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+          ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
           : baseCost;
 
       const discountPercent = pkg.discountPercent || product.discountPercent || 0;
       const userPrice =
         discountPercent > 0
-          ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+          ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
           : priceBeforeDiscount;
 
       return {
@@ -1125,13 +1137,13 @@ export const getProductDetails = async (id, userCurrency = null) => {
 
           const priceBeforeDiscount =
             profitPercentage > 0
-              ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+              ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
               : baseCost;
 
           const discountPercent = product.discountPercent || 0;
           const userPrice =
             discountPercent > 0
-              ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+              ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
               : priceBeforeDiscount;
 
           return {
@@ -1179,13 +1191,13 @@ export const getProductDetails = async (id, userCurrency = null) => {
 
   const fallbackPriceBeforeDiscount =
     profitPercentage > 0
-      ? Number((fallbackBaseCost * (1 + profitPercentage / 100)).toFixed(4))
+      ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
       : fallbackBaseCost;
 
   const discountPercent = product.discountPercent || 0;
   const fallbackUserPrice =
     discountPercent > 0
-      ? Number((fallbackPriceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+      ? calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100))
       : fallbackPriceBeforeDiscount;
 
   return {

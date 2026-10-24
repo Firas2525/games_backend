@@ -96,30 +96,26 @@ export const executePurchase = async ({
       ? activeItem.sellingPrice
       : activeItem?.price || 0;
 
-  // Expected price with profit
+  // Expected price with profit (Preserving full 8 decimals for fractional unit prices < 1 to prevent rounding errors)
   const priceBeforeDiscount =
     profitPercentage > 0
-      ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
+      ? (baseCost >= 1 ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4)) : Number((baseCost * (1 + profitPercentage / 100)).toFixed(8)))
       : baseCost;
 
   const calculatedSellingPrice =
     discountPercent > 0
-      ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+      ? (priceBeforeDiscount >= 1 ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4)) : Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(8)))
       : priceBeforeDiscount;
 
   // Unit selling price charged to user:
-  // Must respect the price displayed on the user's screen (e.g. 2.50)
-  let unitSellingPrice = Number(clientBasePrice) || 0;
-  if (unitSellingPrice <= 0) {
-    unitSellingPrice = calculatedSellingPrice > 0 ? calculatedSellingPrice : baseCost;
-  }
+  let unitSellingPrice = calculatedSellingPrice > 0 ? calculatedSellingPrice : baseCost;
 
   // Unit cost from provider
   let unitCost = baseCost;
   if (unitCost <= 0 && unitSellingPrice > 0) {
     unitCost =
       profitPercentage > 0
-        ? Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(4))
+        ? (unitSellingPrice >= 1 ? Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(4)) : Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(8)))
         : unitSellingPrice;
   }
 
