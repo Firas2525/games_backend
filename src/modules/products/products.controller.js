@@ -106,3 +106,13 @@ export const getDetails = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'Product details fetched successfully');
 });
 
+export const updateDiscount = asyncHandler(async (req, res) => {
+  const { productIds, discountPercent } = req.body;
+  const ids = Array.isArray(productIds) ? productIds : (req.params.id ? [req.params.id] : []);
+  const result = await productsService.updateProductsDiscount(ids, discountPercent);
+  const msg = Number(discountPercent) > 0
+    ? `تم تطبيق خصم ${discountPercent}% على ${result.modifiedCount} منتج بنجاح`
+    : `تم إزالة الخصم عن ${result.modifiedCount} منتج بنجاح`;
+  return ApiResponse.success(res, result, msg);
+});
+

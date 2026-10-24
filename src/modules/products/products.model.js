@@ -81,6 +81,13 @@ const productSchema = new mongoose.Schema(
       type: Number,
       default: null, // If null, uses originalPrice
     },
+    discountPercent: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+      index: true,
+    },
     currency: {
       type: String,
       default: '$',

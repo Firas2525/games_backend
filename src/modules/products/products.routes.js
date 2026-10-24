@@ -19,6 +19,7 @@ import {
   bulkAssignSubCategory,
   getUserList,
   getDetails,
+  updateDiscount,
 } from './products.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
@@ -39,6 +40,8 @@ router.use(authenticate, authorize(ROLES.ADMIN));
 
 router.post('/sync', sync);
 router.get('/admin', getAdminList);
+router.patch('/discount', updateDiscount);
+router.patch('/:id/discount', updateDiscount);
 router.post('/categories', addCategory);
 router.patch('/categories/:id', editCategory);
 router.delete('/categories/:id', removeCategory);

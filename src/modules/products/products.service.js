@@ -322,6 +322,9 @@ export const getAdminProducts = async (query = {}) => {
   if (query.isVisible !== undefined && query.isVisible !== 'all') {
     filter.isVisible = query.isVisible === 'true';
   }
+  if (query.hasDiscount === 'true' || query.discounted === 'true') {
+    filter.discountPercent = { $gt: 0 };
+  }
   if (query.search) {
     filter.$or = [
       { name: { $regex: query.search, $options: 'i' } },
@@ -342,10 +345,17 @@ export const getAdminProducts = async (query = {}) => {
     const calculatedPrice = profitPercentage > 0
       ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
       : baseCost;
+    const discountPercent = p.discountPercent || 0;
+    const finalPrice = discountPercent > 0
+      ? Number((calculatedPrice * (1 - discountPercent / 100)).toFixed(4))
+      : calculatedPrice;
     return {
       ...p,
       costPrice: baseCost,
       calculatedPrice,
+      priceBeforeDiscount: calculatedPrice,
+      price: finalPrice,
+      discountPercent,
     };
   });
 
@@ -859,14 +869,21 @@ export const getUserProducts = async (query = {}) => {
         : doc.price && doc.price > 0
         ? doc.price
         : doc.originalPrice || 0;
-    const finalPrice =
+    const priceBeforeDiscount =
       profitPercentage > 0
         ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
         : baseCost;
+    const discountPercent = doc.discountPercent || 0;
+    const finalPrice =
+      discountPercent > 0
+        ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+        : priceBeforeDiscount;
     return {
       ...doc,
       costPrice: baseCost,
       price: finalPrice,
+      priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
+      discountPercent,
     };
   });
 
@@ -950,10 +967,16 @@ export const getProductDetails = async (id) => {
           ? pkg.sellingPrice
           : pkg.price || 0;
 
-      const userPrice =
+      const priceBeforeDiscount =
         profitPercentage > 0
           ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
           : baseCost;
+
+      const discountPercent = pkg.discountPercent || product.discountPercent || 0;
+      const userPrice =
+        discountPercent > 0
+          ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+          : priceBeforeDiscount;
 
       return {
         id: pkg.externalId || pkg._id.toString(),
@@ -962,6 +985,8 @@ export const getProductDetails = async (id) => {
         fullName: pkg.name,
         description: pkg.category,
         price: userPrice,
+        priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
+        discountPercent,
         costPrice: baseCost,
         originalPrice: baseCost,
         currency: pkg.currency || (pkg.source === 'roya_syp' ? 'ل.س' : '$'),
@@ -1040,10 +1065,16 @@ export const getProductDetails = async (id) => {
               ? pkg.price
               : parseFloat(pkg.price || product.sellingPrice || product.price || product.originalPrice || 0);
 
-          const userPrice =
+          const priceBeforeDiscount =
             profitPercentage > 0
               ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4))
               : baseCost;
+
+          const discountPercent = product.discountPercent || 0;
+          const userPrice =
+            discountPercent > 0
+              ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+              : priceBeforeDiscount;
 
           return {
             id: pkg.id?.toString() || product.externalId,
@@ -1052,6 +1083,8 @@ export const getProductDetails = async (id) => {
             fullName: pkg.name || product.name,
             description: pkg.description || product.category,
             price: userPrice,
+            priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
+            discountPercent,
             costPrice: baseCost,
             originalPrice: product.originalPrice || baseCost,
             currency: '$',
@@ -1086,13 +1119,24 @@ export const getProductDetails = async (id) => {
       ? product.sellingPrice
       : product.price || 0;
 
-  const fallbackUserPrice =
+  const fallbackPriceBeforeDiscount =
     profitPercentage > 0
       ? Number((fallbackBaseCost * (1 + profitPercentage / 100)).toFixed(4))
       : fallbackBaseCost;
 
+  const discountPercent = product.discountPercent || 0;
+  const fallbackUserPrice =
+    discountPercent > 0
+      ? Number((fallbackPriceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4))
+      : fallbackPriceBeforeDiscount;
+
   return {
-    product,
+    product: {
+      ...(product.toObject ? product.toObject() : product),
+      price: fallbackUserPrice,
+      priceBeforeDiscount: discountPercent > 0 ? fallbackPriceBeforeDiscount : null,
+      discountPercent,
+    },
     source: product.source,
     packages: [
       {
@@ -1102,6 +1146,8 @@ export const getProductDetails = async (id) => {
         fullName: product.name,
         description: product.category,
         price: fallbackUserPrice,
+        priceBeforeDiscount: discountPercent > 0 ? fallbackPriceBeforeDiscount : null,
+        discountPercent,
         costPrice: fallbackBaseCost,
         originalPrice: fallbackBaseCost,
         currency: product.currency || '$',
@@ -1113,5 +1159,36 @@ export const getProductDetails = async (id) => {
         qtyValues: product.qtyValues || null,
       },
     ],
+  };
+};
+
+// 12. Batch or Single Product Discount Update
+export const updateProductsDiscount = async (productIds, discountPercent) => {
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    throw new ApiError('يرجى تحديد المنتجات المراد تعديل نسبة الخصم لها', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const discount = Math.max(0, Number(discountPercent) || 0);
+
+  // Business logic constraint: discountPercent <= profitPercentage
+  const settings = await getSettings();
+  const profitPercentage = settings.profitPercentage || 0;
+
+  if (discount > profitPercentage) {
+    throw new ApiError(
+      `نسبة الخصم (${discount}%) لا يمكن أن تتجاوز نسبة الربح المحددة في النظام (${profitPercentage}%) لمنع البيع بخسارة`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  const result = await Product.updateMany(
+    { _id: { $in: productIds } },
+    { $set: { discountPercent: discount } }
+  );
+
+  return {
+    matchedCount: result.matchedCount,
+    modifiedCount: result.modifiedCount,
+    discountPercent: discount,
   };
 };

@@ -53,17 +53,23 @@ export const executePurchase = async ({
   const validQuantity = Math.max(1, Number(quantity) || 1);
   const totalCost = Number((unitCost * validQuantity).toFixed(4));
 
-  // 2. Fetch current profit margin percentage from settings
+  // 2. Fetch current profit margin percentage from settings & product discount
   const settings = await getSettings();
   const profitPercentage = settings.profitPercentage || 0;
+  const discountPercent = product?.discountPercent || 0;
 
-  // 3. User Price = cost + profit margin
-  const totalUserPrice =
+  // 3. User Price = cost + profit margin - discount
+  const normalPrice =
     profitPercentage > 0
       ? Number((totalCost * (1 + profitPercentage / 100)).toFixed(4))
       : totalCost;
 
-  const profit = Number((totalUserPrice - totalCost).toFixed(4));
+  const totalUserPrice =
+    discountPercent > 0
+      ? Number((normalPrice * (1 - discountPercent / 100)).toFixed(4))
+      : normalPrice;
+
+  const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));
 
   // 4. Verify user balance
   const currentBalance = user.balance || 0;
@@ -109,6 +115,7 @@ export const executePurchase = async ({
     userPrice: totalUserPrice,
     profit,
     profitPercentage,
+    discountPercent,
     currency,
     status: 'completed',
     providerPayload,
