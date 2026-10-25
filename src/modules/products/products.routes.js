@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   sync,
   triggerSync,
+  reclassify,
   getAdminList,
   getStats,
   toggleVisibility,
@@ -33,6 +34,8 @@ router.get('/subcategories', optionalAuthenticate, getSubCategoriesList);
 router.get('/stats', getStats);
 router.get('/sync-now', triggerSync);
 router.post('/sync-now', triggerSync);
+router.get('/reclassify', reclassify);
+router.post('/reclassify', reclassify);
 router.get('/:id/details', optionalAuthenticate, getDetails);
 
 // Admin-only protected routes

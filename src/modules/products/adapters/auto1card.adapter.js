@@ -30,7 +30,7 @@ export const normalizeAuto1CardProduct = (item) => {
   const priceNum = parseFloat(rawPrice) || 0;
   const name = item.name || 'بدون اسم';
   const category = item.category_name || item.description || 'بطاقات متنوعة';
-  const mainCategory = detectMainCategory(name, category);
+  const mainCategory = detectMainCategory(name, category, 'syria_card');
 
   return {
     externalId: String(item.id),

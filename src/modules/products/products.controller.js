@@ -12,6 +12,11 @@ export const triggerSync = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'Products catalog synchronized and classified successfully');
 });
 
+export const reclassify = asyncHandler(async (req, res) => {
+  const result = await productsService.reclassifyAllProducts();
+  return ApiResponse.success(res, result, result.message);
+});
+
 export const getAdminList = asyncHandler(async (req, res) => {
   const result = await productsService.getAdminProducts(req.query);
   return ApiResponse.success(res, result, 'Admin products fetched successfully');

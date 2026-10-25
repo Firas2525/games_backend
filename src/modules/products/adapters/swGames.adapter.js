@@ -79,7 +79,7 @@ export const normalizeSwGamesProduct = (
   const priceNum = parseFloat(rawPrice) || 0;
   const name = item.name || 'بدون اسم';
   const category = item.gameName || 'ألعاب رؤيا';
-  const mainCategory = detectMainCategory(name, category);
+  const mainCategory = detectMainCategory(name, category, sourceKey);
   const image = normalizeSwGamesImage(item);
 
   return {

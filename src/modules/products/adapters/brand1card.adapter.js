@@ -60,7 +60,7 @@ export const normalizeBrand1CardProduct = (item) => {
   const priceNum = parseFloat(rawPrice) || 0;
   const name = item.name || 'بدون اسم';
   const category = item.category_name || item.description || 'بطاقات وخدمات';
-  const mainCategory = detectMainCategory(name, category);
+  const mainCategory = detectMainCategory(name, category, 'brand1card');
 
   let image = '';
   if (item.category_img) {

@@ -282,7 +282,7 @@ export const syncAllProducts = async () => {
         filter: { _id: p._id },
         update: {
           $set: {
-            mainCategory: detectMainCategory(p.name, p.category),
+            mainCategory: detectMainCategory(p.name, p.category, p.source),
             isVisible: true,
           },
         },
@@ -290,6 +290,32 @@ export const syncAllProducts = async () => {
     }));
     await Product.bulkWrite(reclassOps, { ordered: false });
   }
+
+// Standalone function to reclassify all non-overridden products
+export const reclassifyAllProducts = async () => {
+  const allExisting = await Product.find({ isCategoryOverridden: { $ne: true } }).lean();
+  if (allExisting.length === 0) {
+    return { reclassifiedCount: 0, message: 'لا توجد منتجات بحاجة لإعادة الفرز' };
+  }
+
+  const reclassOps = allExisting.map((p) => ({
+    updateOne: {
+      filter: { _id: p._id },
+      update: {
+        $set: {
+          mainCategory: detectMainCategory(p.name, p.category, p.source),
+          isVisible: true,
+        },
+      },
+    },
+  }));
+  const res = await Product.bulkWrite(reclassOps, { ordered: false });
+  return {
+    reclassifiedCount: res.modifiedCount || 0,
+    totalChecked: allExisting.length,
+    message: 'تم إعادة فرز المنتجات بنجاح بناءً على الفرز الذكي المبدئي',
+  };
+};
 
   const totalSynced =
     (bulkResult.upsertedCount || 0) +
