@@ -222,6 +222,10 @@ export const createDepositRequest = async ({
     );
   }
 
+  if (method.requiresReceiptImage && !String(receiptImage || '').trim()) {
+    throw new ApiError('طريقة الإيداع هذه تتطلب إرفاق صورة إشعار التحويل', HTTP_STATUS.BAD_REQUEST);
+  }
+
   // Check duplicate operation number for same method
   const existingOp = await Deposit.findOne({
     methodKey,
