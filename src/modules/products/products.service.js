@@ -356,6 +356,45 @@ export const autoSyncOnStartup = async () => {
   }
 };
 
+// Helpers: Resolve category-specific profit percentage
+export const getCategoryProfitMap = async () => {
+  try {
+    const [categories, subCategories] = await Promise.all([
+      Category.find({}).select('key profitPercentage').lean(),
+      SubCategory.find({}).select('_id profitPercentage').lean(),
+    ]);
+    const catMap = {};
+    for (const c of categories) {
+      if (c && c.key && c.profitPercentage !== null && c.profitPercentage !== undefined && !isNaN(c.profitPercentage)) {
+        catMap[c.key] = Number(c.profitPercentage);
+      }
+    }
+    const subCatMap = {};
+    for (const sc of subCategories) {
+      if (sc && sc._id && sc.profitPercentage !== null && sc.profitPercentage !== undefined && !isNaN(sc.profitPercentage)) {
+        subCatMap[sc._id.toString()] = Number(sc.profitPercentage);
+      }
+    }
+    return { catMap, subCatMap };
+  } catch (err) {
+    console.warn('[getCategoryProfitMap] error:', err.message);
+    return { catMap: {}, subCatMap: {} };
+  }
+};
+
+export const resolveProductProfitPercentage = (product, globalProfit, catMap = {}, subCatMap = {}) => {
+  if (product) {
+    const subId = product.subCategoryId ? product.subCategoryId.toString() : null;
+    if (subId && subCatMap[subId] !== undefined) {
+      return subCatMap[subId];
+    }
+    if (product.mainCategory && catMap[product.mainCategory] !== undefined) {
+      return catMap[product.mainCategory];
+    }
+  }
+  return globalProfit || 0;
+};
+
 // 4. Admin: Get all normalized products with filters
 export const getAdminProducts = async (query = {}) => {
   const filter = {};
@@ -388,12 +427,14 @@ export const getAdminProducts = async (query = {}) => {
     .lean();
 
   const settings = await getSettings();
-  const profitPercentage = settings.profitPercentage || 0;
+  const globalProfitPercentage = settings.profitPercentage || 0;
+  const { catMap, subCatMap } = await getCategoryProfitMap();
 
   const mappedProducts = products.map((p) => {
     const baseCost = p.originalPrice && p.originalPrice > 0 ? p.originalPrice : (p.price || 0);
-    const calculatedPrice = profitPercentage > 0
-      ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
+    const effectiveProfit = resolveProductProfitPercentage(p, globalProfitPercentage, catMap, subCatMap);
+    const calculatedPrice = effectiveProfit > 0
+      ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
       : baseCost;
     const discountPercent = p.discountPercent || 0;
     const finalPrice = discountPercent > 0
@@ -406,6 +447,7 @@ export const getAdminProducts = async (query = {}) => {
       priceBeforeDiscount: calculatedPrice,
       price: finalPrice,
       discountPercent,
+      profitPercentage: effectiveProfit,
     };
   });
 
@@ -416,7 +458,7 @@ export const getAdminProducts = async (query = {}) => {
     products: mappedProducts,
     categories,
     sources,
-    profitPercentage,
+    profitPercentage: globalProfitPercentage,
     totalCount: products.length,
   };
 };
@@ -660,13 +702,14 @@ export const getAllCategories = async (userCurrency = null) => {
     imageUrl: cat.imageUrl || '',
     sortOrder: cat.sortOrder,
     isCustom: cat.isCustom,
+    profitPercentage: cat.profitPercentage !== undefined && cat.profitPercentage !== null ? cat.profitPercentage : null,
     productCount: countMap[cat.key] || 0,
   }));
 };
 
 // 6.01 Admin: Create new main category
 export const createCategory = async (data) => {
-  let { key, title, subtitle, icon, color, imageUrl } = data;
+  let { key, title, subtitle, icon, color, imageUrl, profitPercentage } = data;
   if (!title || !title.trim()) {
     throw new ApiError('عنوان القسم مطلوب', HTTP_STATUS.BAD_REQUEST);
   }
@@ -690,6 +733,9 @@ export const createCategory = async (data) => {
     icon: icon?.trim() || 'category_rounded',
     color: color?.trim() || '#6366F1',
     imageUrl: imageUrl?.trim() || '',
+    profitPercentage: profitPercentage !== undefined && profitPercentage !== null && profitPercentage !== '' && profitPercentage !== 'null'
+      ? Math.max(0, Number(profitPercentage))
+      : null,
     sortOrder: Date.now() % 1000,
     isCustom: true,
     isVisible: true,
@@ -698,13 +744,13 @@ export const createCategory = async (data) => {
   return category;
 };
 
-// 6.015 Admin: Update existing category (title, image, icon, color, etc.)
+// 6.015 Admin: Update existing category (title, image, icon, color, profitPercentage, etc.)
 export const updateCategory = async (id, data) => {
   const category = await Category.findById(id);
   if (!category) {
     throw new ApiError('القسم غير موجود', HTTP_STATUS.NOT_FOUND);
   }
-  const { title, subtitle, icon, color, imageUrl, isVisible, sortOrder } = data;
+  const { title, subtitle, icon, color, imageUrl, isVisible, sortOrder, profitPercentage } = data;
   if (title !== undefined) category.title = title.trim();
   if (subtitle !== undefined) category.subtitle = subtitle.trim();
   if (icon !== undefined) category.icon = icon.trim();
@@ -712,6 +758,13 @@ export const updateCategory = async (id, data) => {
   if (imageUrl !== undefined) category.imageUrl = imageUrl.trim();
   if (isVisible !== undefined) category.isVisible = isVisible;
   if (sortOrder !== undefined) category.sortOrder = Number(sortOrder) || 0;
+  if (profitPercentage !== undefined) {
+    if (profitPercentage === null || profitPercentage === '' || profitPercentage === 'null') {
+      category.profitPercentage = null;
+    } else {
+      category.profitPercentage = Math.max(0, Number(profitPercentage));
+    }
+  }
 
   await category.save();
   return category;
@@ -1002,11 +1055,13 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   const filter = andClauses.length === 1 ? andClauses[0] : { $and: andClauses };
 
   const settings = await getSettings();
-  const profitPercentage = settings.profitPercentage || 0;
+  const globalProfitPercentage = settings.profitPercentage || 0;
+  const { catMap, subCatMap } = await getCategoryProfitMap();
 
   const products = await Product.find(filter).sort({ category: 1, name: 1 });
   const mappedProducts = products.map((p) => {
     const doc = p.toObject ? p.toObject() : { ...p };
+    const effectiveProfit = resolveProductProfitPercentage(doc, globalProfitPercentage, catMap, subCatMap);
     const baseCost =
       doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
         ? doc.sellingPrice
@@ -1014,8 +1069,8 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
         ? doc.price
         : doc.originalPrice || 0;
     const priceBeforeDiscount =
-      profitPercentage > 0
-        ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
+      effectiveProfit > 0
+        ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
         : baseCost;
     const discountPercent = doc.discountPercent || 0;
     const finalPrice =
@@ -1028,6 +1083,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
       price: finalPrice,
       priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
       discountPercent,
+      profitPercentage: effectiveProfit,
     };
   });
 
@@ -1062,7 +1118,9 @@ export const getProductDetails = async (id, userCurrency = null) => {
   }
 
   const settings = await getSettings();
-  const profitPercentage = settings.profitPercentage || 0;
+  const globalProfitPercentage = settings.profitPercentage || 0;
+  const { catMap, subCatMap } = await getCategoryProfitMap();
+  const profitPercentage = resolveProductProfitPercentage(product, globalProfitPercentage, catMap, subCatMap);
 
   // 1. If provider is SW Games (رؤيا - ROYA_USD / ROYA_SYP)
   if (

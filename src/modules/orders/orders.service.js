@@ -3,6 +3,8 @@ import { Order } from './orders.model.js';
 import { User } from '../users/users.model.js';
 import { Transaction } from '../users/transactions.model.js';
 import { Product } from '../products/products.model.js';
+import { Category } from '../products/categories.model.js';
+import { SubCategory } from '../products/subcategories.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
@@ -105,7 +107,21 @@ export const executePurchase = async ({
 
   // 2. Resolve true base cost and selling price
   const settings = await getSettings();
-  const profitPercentage = settings.profitPercentage || 0;
+  let profitPercentage = settings.profitPercentage || 0;
+  if (product) {
+    if (product.subCategoryId) {
+      const subCat = await SubCategory.findById(product.subCategoryId).select('profitPercentage').lean();
+      if (subCat && subCat.profitPercentage !== null && subCat.profitPercentage !== undefined && !isNaN(subCat.profitPercentage)) {
+        profitPercentage = Number(subCat.profitPercentage);
+      }
+    }
+    if (profitPercentage === (settings.profitPercentage || 0) && product.mainCategory) {
+      const cat = await Category.findOne({ key: product.mainCategory }).select('profitPercentage').lean();
+      if (cat && cat.profitPercentage !== null && cat.profitPercentage !== undefined && !isNaN(cat.profitPercentage)) {
+        profitPercentage = Number(cat.profitPercentage);
+      }
+    }
+  }
   const discountPercent = activeItem?.discountPercent || product?.discountPercent || 0;
 
   const baseCost =

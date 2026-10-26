@@ -47,6 +47,11 @@ const categorySchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    profitPercentage: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
   },
   {
     timestamps: true,
