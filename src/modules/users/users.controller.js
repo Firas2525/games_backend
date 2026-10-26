@@ -52,3 +52,10 @@ export const getAllTransactionsHandler = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, transactions, 'All operations logs retrieved successfully');
 });
 
+export const changePassword = asyncHandler(async (req, res) => {
+  const { password } = req.body;
+  const user = await usersService.updateUserPassword(req.params.id, password);
+  return ApiResponse.success(res, user, 'User password updated successfully');
+});
+
+

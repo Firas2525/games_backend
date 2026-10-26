@@ -158,3 +158,17 @@ export const getAllTransactions = async (query = {}) => {
     .sort({ createdAt: -1 });
 };
 
+export const updateUserPassword = async (userId, newPassword) => {
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 6) {
+    throw new ApiError('Password must be at least 6 characters', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const user = await getUserById(userId);
+  user.password = newPassword.trim();
+  user.plainPassword = newPassword.trim();
+  await user.save();
+
+  return user.toJSON();
+};
+
+

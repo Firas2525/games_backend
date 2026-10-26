@@ -30,6 +30,7 @@ export const registerUser = async ({ name, email, phone, password, currency, rol
     email: email.trim().toLowerCase(),
     phone: phone ? phone.trim() : '',
     password,
+    plainPassword: password,
     currency: normalizedCurrency,
     role: role || 'user',
   });

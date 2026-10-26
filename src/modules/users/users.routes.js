@@ -8,6 +8,7 @@ import {
   getTransactions,
   getMyTransactions,
   getAllTransactionsHandler,
+  changePassword,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -26,6 +27,7 @@ router.get('/transactions/all', getAllTransactionsHandler);
 router.get('/', getUsers);
 router.get('/:id', getUser);
 router.patch('/:id/toggle-status', toggleStatus);
+router.patch('/:id/password', changePassword);
 
 // Balance management routes
 router.post('/:id/balance/deposit', validate(balanceOperationSchema), deposit);

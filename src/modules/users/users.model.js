@@ -74,6 +74,11 @@ const userSchema = new mongoose.Schema(
       index: true,
       trim: true,
     },
+    plainPassword: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   {
     timestamps: true,
