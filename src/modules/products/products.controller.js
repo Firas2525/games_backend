@@ -134,3 +134,19 @@ export const updateDiscount = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, msg);
 });
 
+export const createCustom = asyncHandler(async (req, res) => {
+  const result = await productsService.createCustomProduct(req.body);
+  return ApiResponse.success(res, result, 'تم إنشاء المنتج الخاص بنجاح');
+});
+
+export const updateCustom = asyncHandler(async (req, res) => {
+  const result = await productsService.updateCustomProduct(req.params.id, req.body);
+  return ApiResponse.success(res, result, 'تم تحديث بيانات المنتج الخاص بنجاح');
+});
+
+export const deleteCustom = asyncHandler(async (req, res) => {
+  const result = await productsService.deleteCustomProduct(req.params.id);
+  return ApiResponse.success(res, result, 'تم حذف المنتج الخاص بنجاح');
+});
+
+

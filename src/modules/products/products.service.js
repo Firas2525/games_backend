@@ -291,6 +291,20 @@ export const syncAllProducts = async () => {
     await Product.bulkWrite(reclassOps, { ordered: false });
   }
 
+  const totalSynced =
+    (bulkResult.upsertedCount || 0) +
+    (bulkResult.modifiedCount || 0) +
+    (bulkResult.matchedCount || 0);
+
+  return {
+    totalSynced,
+    royaUsdCount: swUsdList.length,
+    royaSypCount: swSypList.length,
+    syriaCardCount: auto1List.length,
+    brand1CardCount: brand1List.length,
+  };
+};
+
 // Standalone function to reclassify all non-overridden products
 export const reclassifyAllProducts = async () => {
   const allExisting = await Product.find({ isCategoryOverridden: { $ne: true } }).lean();
@@ -317,19 +331,6 @@ export const reclassifyAllProducts = async () => {
   };
 };
 
-  const totalSynced =
-    (bulkResult.upsertedCount || 0) +
-    (bulkResult.modifiedCount || 0) +
-    (bulkResult.matchedCount || 0);
-
-  return {
-    totalSynced,
-    royaUsdCount: swUsdList.length,
-    royaSypCount: swSypList.length,
-    syriaCardCount: auto1List.length,
-    brand1CardCount: brand1List.length,
-  };
-};
 
 // 3.1 Background Initializer on Server Startup
 export const autoSyncOnStartup = async () => {
@@ -439,6 +440,7 @@ export const getCatalogStats = async () => {
     roya_usd: 0,
     roya_syp: 0,
     syria_card: 0,
+    custom: 0,
   };
   for (const item of sourceAggregation) {
     if (item._id) {
@@ -446,6 +448,8 @@ export const getCatalogStats = async () => {
         sources.roya_usd = (sources.roya_usd || 0) + item.count;
       } else if (item._id === 'roya_syp') {
         sources.roya_syp = (sources.roya_syp || 0) + item.count;
+      } else if (item._id === 'custom') {
+        sources.custom = (sources.custom || 0) + item.count;
       } else {
         sources.syria_card = (sources.syria_card || 0) + item.count;
       }
@@ -1288,3 +1292,160 @@ export const updateProductsDiscount = async (productIds, discountPercent) => {
     discountPercent: discount,
   };
 };
+
+// 13. Create Custom Product for "مزودي الخاص"
+export const createCustomProduct = async (data) => {
+  const {
+    name,
+    category,
+    mainCategory,
+    price,
+    originalPrice,
+    sellingPrice,
+    currency,
+    image,
+    isAvailable = true,
+    isVisible = true,
+    minCount = 1,
+    maxCount = null,
+    qtyValues = null,
+    requiredFields = [],
+    note = '',
+  } = data;
+
+  if (!name || !name.trim()) {
+    throw new ApiError('اسم المنتج مطلوب', HTTP_STATUS.BAD_REQUEST);
+  }
+  if (!category || !category.trim()) {
+    throw new ApiError('فئة / لعبة المنتج مطلوبة', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const cost = Number(originalPrice ?? price) || 0;
+  if (cost < 0) {
+    throw new ApiError('السعر يجب أن يكون أكبر من أو يساوي الصفر', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const finalSellingPrice = sellingPrice !== undefined && sellingPrice !== null
+    ? Number(sellingPrice)
+    : Number(price ?? cost);
+
+  const resolvedMainCat = mainCategory && mainCategory.trim()
+    ? mainCategory.trim()
+    : detectMainCategory(name, category, 'custom');
+
+  // Format required dynamic fields
+  let formattedFields = [];
+  if (Array.isArray(requiredFields) && requiredFields.length > 0) {
+    formattedFields = requiredFields.map((f, idx) => ({
+      name: f.name?.trim() || `field_${idx}`,
+      label: f.label?.trim() || f.name?.trim() || 'المعرف',
+      type: f.type || 'text',
+      placeholder: f.placeholder?.trim() || `يرجى إدخال ${f.label || f.name || 'المعرف'}`,
+      required: f.required !== false,
+    }));
+  } else {
+    formattedFields.push({
+      name: 'Player_ID',
+      label: 'ايدي اللاعب (Player ID)',
+      type: 'text',
+      placeholder: 'يرجى إدخال ايدي الحساب أو اللاعب',
+      required: true,
+    });
+  }
+
+  const externalId = `CUST-${Date.now().toString(36)}-${Math.floor(100 + Math.random() * 900)}`;
+
+  const product = await Product.create({
+    externalId,
+    source: 'custom',
+    sourceName: 'مزودي الخاص',
+    name: name.trim(),
+    category: category.trim(),
+    mainCategory: resolvedMainCat,
+    isCategoryOverridden: true,
+    originalPrice: cost,
+    price: finalSellingPrice,
+    sellingPrice: finalSellingPrice,
+    currency: currency === 'ل.س' || currency === 'SYP' ? 'ل.س' : '$',
+    image: image?.trim() || '',
+    isAvailable: isAvailable !== false,
+    isVisible: isVisible !== false,
+    minCount: Number(minCount) || 1,
+    maxCount: maxCount ? Number(maxCount) : null,
+    qtyValues: Array.isArray(qtyValues) && qtyValues.length > 0 ? qtyValues.map(Number) : null,
+    requiredFields: formattedFields,
+    note: note?.trim() || '',
+  });
+
+  return product;
+};
+
+// 14. Update Custom Product
+export const updateCustomProduct = async (id, data) => {
+  const product = await Product.findOne({ _id: id, source: 'custom' });
+  if (!product) {
+    throw new ApiError('المنتج الخاص غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  const {
+    name,
+    category,
+    mainCategory,
+    price,
+    originalPrice,
+    sellingPrice,
+    currency,
+    image,
+    isAvailable,
+    isVisible,
+    minCount,
+    maxCount,
+    qtyValues,
+    requiredFields,
+    note,
+  } = data;
+
+  if (name !== undefined) product.name = name.trim();
+  if (category !== undefined) product.category = category.trim();
+  if (mainCategory !== undefined) product.mainCategory = mainCategory.trim();
+  if (originalPrice !== undefined) product.originalPrice = Number(originalPrice);
+  if (price !== undefined) {
+    product.price = Number(price);
+    product.sellingPrice = Number(price);
+  }
+  if (sellingPrice !== undefined) product.sellingPrice = Number(sellingPrice);
+  if (currency !== undefined) product.currency = currency === 'ل.س' || currency === 'SYP' ? 'ل.س' : '$';
+  if (image !== undefined) product.image = image.trim();
+  if (isAvailable !== undefined) product.isAvailable = Boolean(isAvailable);
+  if (isVisible !== undefined) product.isVisible = Boolean(isVisible);
+  if (minCount !== undefined) product.minCount = Number(minCount) || 1;
+  if (maxCount !== undefined) product.maxCount = maxCount ? Number(maxCount) : null;
+  if (qtyValues !== undefined) {
+    product.qtyValues = Array.isArray(qtyValues) && qtyValues.length > 0 ? qtyValues.map(Number) : null;
+  }
+  if (Array.isArray(requiredFields)) {
+    product.requiredFields = requiredFields.map((f, idx) => ({
+      name: f.name?.trim() || `field_${idx}`,
+      label: f.label?.trim() || f.name?.trim() || 'المعرف',
+      type: f.type || 'text',
+      placeholder: f.placeholder?.trim() || `يرجى إدخال ${f.label || f.name || 'المعرف'}`,
+      required: f.required !== false,
+    }));
+  }
+  if (note !== undefined) product.note = note.trim();
+
+  await product.save();
+  return product;
+};
+
+// 15. Delete Custom Product
+export const deleteCustomProduct = async (id) => {
+  const product = await Product.findOne({ _id: id, source: 'custom' });
+  if (!product) {
+    throw new ApiError('المنتج الخاص غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  await product.deleteOne();
+  return { message: 'تم حذف المنتج بنجاح', id };
+};
+

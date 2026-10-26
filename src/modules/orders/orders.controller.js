@@ -37,3 +37,33 @@ export const syncOrders = asyncHandler(async (req, res) => {
   const result = await ordersService.syncPendingOrders();
   return ApiResponse.success(res, result, `تم تحديث ${result.updatedCount} طلب من أصل ${result.checkedCount}`);
 });
+
+export const getCustomOrders = asyncHandler(async (req, res) => {
+  const result = await ordersService.getCustomOrdersAdmin(req.query);
+  return ApiResponse.success(res, result, 'Custom provider orders fetched successfully');
+});
+
+export const completeCustomOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  const result = await ordersService.completeCustomOrder(orderId, req.body);
+  return ApiResponse.success(res, result, 'تم إكمال طلب المزود الخاص وتأكيده بنجاح');
+});
+
+export const rejectCustomOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  const result = await ordersService.cancelOrRejectCustomOrder(orderId, {
+    reason: req.body?.reason,
+    isReject: true,
+  });
+  return ApiResponse.success(res, result, 'تم رفض الطلب وإعادة الرصيد إلى محفظة المستخدم بنجاح');
+});
+
+export const cancelCustomOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  const result = await ordersService.cancelOrRejectCustomOrder(orderId, {
+    reason: req.body?.reason,
+    isReject: false,
+  });
+  return ApiResponse.success(res, result, 'تم إلغاء الطلب واسترجاع المبلغ إلى محفظة المستخدم بنجاح');
+});
+

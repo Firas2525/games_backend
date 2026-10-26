@@ -153,33 +153,47 @@ export const executePurchase = async ({
     extraFields,
   };
 
+  const isCustomProvider = source === 'custom' || activeItem?.source === 'custom';
+
   let dispatchResult = {
     success: true,
-    status: 'processing',
-    providerPayload: basePayload,
-    providerResponse: null,
-    providerOrderId: null,
+    status: isCustomProvider ? 'pending' : 'processing',
+    providerPayload: isCustomProvider
+      ? {
+          isManual: true,
+          provider: 'مزودي الخاص',
+          targetId: targetId || '',
+          quantity: validQuantity,
+          extraFields,
+        }
+      : basePayload,
+    providerResponse: isCustomProvider
+      ? { message: 'طلب قيد المعالجة اليدوية من قبل إدارة المتجر', assignedAt: new Date() }
+      : null,
+    providerOrderId: isCustomProvider ? orderId : null,
   };
 
-  try {
-    dispatchResult = await dispatchProviderOrder({
-      product: activeItem || product,
-      orderId,
-      targetId,
-      quantity: validQuantity,
-      extraFields,
-      user,
-    });
-  } catch (dispErr) {
-    console.error('Provider dispatch exception:', dispErr);
-    dispatchResult = {
-      success: false,
-      status: 'failed',
-      providerPayload: basePayload,
-      providerResponse: { error: dispErr.message },
-      providerOrderId: null,
-      errorMessage: dispErr.message,
-    };
+  if (!isCustomProvider) {
+    try {
+      dispatchResult = await dispatchProviderOrder({
+        product: activeItem || product,
+        orderId,
+        targetId,
+        quantity: validQuantity,
+        extraFields,
+        user,
+      });
+    } catch (dispErr) {
+      console.error('Provider dispatch exception:', dispErr);
+      dispatchResult = {
+        success: false,
+        status: 'failed',
+        providerPayload: basePayload,
+        providerResponse: { error: dispErr.message },
+        providerOrderId: null,
+        errorMessage: dispErr.message,
+      };
+    }
   }
 
   // 7. Handle Provider Failure with Immediate Refund & Exact Error Reporting
@@ -590,3 +604,130 @@ export const getFinancialStatsAdmin = async () => {
     userProfits,
   };
 };
+
+/**
+ * Admin: Get all orders for 'مزودي الخاص' (custom provider) with stats and filters
+ */
+export const getCustomOrdersAdmin = async (query = {}) => {
+  const filter = { source: 'custom' };
+
+  if (query.status && query.status !== 'all') {
+    filter.status = query.status;
+  }
+
+  if (query.search && query.search.trim()) {
+    const s = query.search.trim();
+    filter.$or = [
+      { orderId: { $regex: s, $options: 'i' } },
+      { productName: { $regex: s, $options: 'i' } },
+      { targetId: { $regex: s, $options: 'i' } },
+    ];
+  }
+
+  const page = parseInt(query.page, 10) || 1;
+  const limit = parseInt(query.limit, 10) || 50;
+  const skip = (page - 1) * limit;
+
+  const [orders, total, countsAgg] = await Promise.all([
+    Order.find(filter)
+      .populate('userId', 'name email phone balance currency accountNumber')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Order.countDocuments(filter),
+    Order.aggregate([
+      { $match: { source: 'custom' } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const stats = {
+    all: 0,
+    pending: 0,
+    completed: 0,
+    cancelled: 0,
+    failed: 0,
+  };
+
+  for (const item of countsAgg) {
+    if (item._id) {
+      stats[item._id] = item.count;
+      stats.all += item.count;
+    }
+  }
+
+  return {
+    orders,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    },
+    stats,
+  };
+};
+
+/**
+ * Admin: Complete custom provider order
+ */
+export const completeCustomOrder = async (orderId, { adminNote = '', responseData = null } = {}) => {
+  const order = await Order.findOne({ orderId, source: 'custom' });
+  if (!order) {
+    throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (order.status === 'completed') {
+    return order;
+  }
+
+  if (order.refunded || order.status === 'cancelled') {
+    throw new ApiError('لا يمكن إكمال طلب تم إلغاؤه واسترجاع قيمته للزبون مسبقاً', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  order.status = 'completed';
+  order.providerResponse = {
+    ...(order.providerResponse || {}),
+    adminNote: adminNote ? adminNote.trim() : '',
+    responseData,
+    completedAt: new Date(),
+    actionBy: 'admin',
+  };
+
+  await order.save();
+  return order;
+};
+
+/**
+ * Admin: Reject / Cancel custom provider order and automatically refund user wallet
+ */
+export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject = false } = {}) => {
+  const order = await Order.findOne({ orderId, source: 'custom' });
+  if (!order) {
+    throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (order.refunded || order.status === 'cancelled') {
+    throw new ApiError('تم إلغاء واسترجاع هذا الطلب مسبقاً', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const actionText = isReject ? 'رفض الطلب' : 'إلغاء الطلب';
+  const customNote = reason ? `${actionText}: ${reason}` : `${actionText} من قبل الإدارة وإرجاع الرصيد للمحفظة`;
+
+  // Process full wallet refund
+  await refundOrderWallet(order, null, customNote);
+
+  order.status = isReject ? 'failed' : 'cancelled';
+  order.providerResponse = {
+    ...(order.providerResponse || {}),
+    adminReason: reason ? reason.trim() : '',
+    actionAt: new Date(),
+    actionBy: 'admin',
+    actionType: isReject ? 'rejected' : 'cancelled',
+  };
+
+  await order.save();
+  return order;
+};
+

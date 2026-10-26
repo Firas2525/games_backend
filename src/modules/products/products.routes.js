@@ -21,6 +21,9 @@ import {
   getUserList,
   getDetails,
   updateDiscount,
+  createCustom,
+  updateCustom,
+  deleteCustom,
 } from './products.controller.js';
 import { authenticate, authorize, optionalAuthenticate } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
@@ -45,6 +48,12 @@ router.post('/sync', sync);
 router.get('/admin', getAdminList);
 router.patch('/discount', updateDiscount);
 router.patch('/:id/discount', updateDiscount);
+
+// Custom Provider ("مزودي الخاص") Products Management
+router.post('/custom', createCustom);
+router.patch('/custom/:id', updateCustom);
+router.delete('/custom/:id', deleteCustom);
+
 router.post('/categories', addCategory);
 router.patch('/categories/:id', editCategory);
 router.delete('/categories/:id', removeCategory);
