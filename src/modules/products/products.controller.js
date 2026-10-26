@@ -33,6 +33,15 @@ export const toggleVisibility = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, product, statusMsg);
 });
 
+export const bulkVisibility = asyncHandler(async (req, res) => {
+  const { productIds, isVisible } = req.body;
+  const result = await productsService.bulkUpdateProductsVisibility(productIds, isVisible);
+  const statusMsg = isVisible !== false
+    ? `تم تفعيل ${result.modifiedCount} منتج بنجاح في المتجر`
+    : `تم إيقاف تفعيل ${result.modifiedCount} منتج بنجاح وإخفائها من المتجر`;
+  return ApiResponse.success(res, result, statusMsg);
+});
+
 export const updateCategory = asyncHandler(async (req, res) => {
   const product = await productsService.updateProductMainCategory(
     req.params.id,

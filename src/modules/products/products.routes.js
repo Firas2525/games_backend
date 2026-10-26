@@ -6,6 +6,7 @@ import {
   getAdminList,
   getStats,
   toggleVisibility,
+  bulkVisibility,
   updateCategory,
   updateCategoryGroup,
   bulkUpdateCategory,
@@ -62,6 +63,7 @@ router.patch('/subcategories/:id', editSubCategory);
 router.delete('/subcategories/:id', removeSubCategory);
 router.patch('/bulk-subcategory', bulkAssignSubCategory);
 router.patch('/bulk-category', bulkUpdateCategory);
+router.patch('/bulk-visibility', bulkVisibility);
 router.patch('/category-group', updateCategoryGroup);
 router.patch('/:id/toggle-visibility', toggleVisibility);
 router.patch('/:id/category', updateCategory);

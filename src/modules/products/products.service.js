@@ -487,6 +487,24 @@ export const toggleProductVisibility = async (id) => {
   return product;
 };
 
+// 5.1 Admin: Bulk update products visibility (Activate / Deactivate multiple items)
+export const bulkUpdateProductsVisibility = async (productIds, isVisible) => {
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    throw new ApiError('يرجى تحديد المنتجات المراد تعديل حالتها', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const result = await Product.updateMany(
+    { _id: { $in: productIds } },
+    { $set: { isVisible: Boolean(isVisible) } }
+  );
+
+  return {
+    matchedCount: result.matchedCount,
+    modifiedCount: result.modifiedCount,
+    isVisible: Boolean(isVisible),
+  };
+};
+
 export const DEFAULT_MAIN_CATEGORIES = [
   {
     key: 'games',
