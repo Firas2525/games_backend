@@ -240,8 +240,21 @@ export const createDepositRequest = async ({
   const feeAmount = Number(((cleanAmount * feePercent) / 100).toFixed(4));
   const netAmount = Number((cleanAmount - feeAmount).toFixed(4));
 
-  // Generate friendly unique deposit ID
-  const depositId = `DEP-${Date.now().toString().slice(-6)}${Math.floor(1000 + Math.random() * 9000)}`;
+  // Generate friendly unique 6-digit deposit ID
+  let isUnique = false;
+  let depositId = '';
+  let attempts = 0;
+  while (!isUnique && attempts < 30) {
+    attempts++;
+    depositId = Math.floor(100000 + Math.random() * 900000).toString();
+    const existing = await Deposit.findOne({ depositId }).select('_id');
+    if (!existing) {
+      isUnique = true;
+    }
+  }
+  if (!isUnique) {
+    depositId = Math.floor(1000000 + Math.random() * 9000000).toString();
+  }
 
   // Create deposit record with 'pending' status
   const deposit = await Deposit.create({

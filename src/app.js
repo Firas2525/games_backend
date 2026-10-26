@@ -83,13 +83,23 @@ app.get('/test-brand', async (req, res) => {
   }
 });
 
-// Force sync trigger endpoint
-app.get('/trigger-sync', async (req, res) => {
+import { handleRoyaWebhook } from './modules/orders/orders.service.js';
+
+// Dedicated Webhook endpoint for SW Games / Roya (Instant order completion and failure refunds)
+app.all(['/roya_webhook', '/api/v1/orders/webhook/roya'], async (req, res) => {
   try {
-    const result = await syncAllProducts();
-    return res.json({ success: true, result });
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        ok: true,
+        status: 'active',
+        message: 'Roya Webhook endpoint is live and responding perfectly',
+      });
+    }
+    const result = await handleRoyaWebhook(req.body);
+    return res.status(200).json(result);
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('[Roya Webhook Error]:', err);
+    return res.status(200).json({ ok: false, error: err.message });
   }
 });
 

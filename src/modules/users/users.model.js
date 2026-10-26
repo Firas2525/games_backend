@@ -67,12 +67,20 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    userCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+      trim: true,
+    },
   },
   {
     timestamps: true,
     toJSON: {
       transform: (doc, ret) => {
         ret.id = ret._id;
+        ret.userCode = ret.userCode || (ret._id ? ret._id.toString().slice(-6) : '');
         delete ret._id;
         delete ret.__v;
         delete ret.password;
@@ -82,8 +90,25 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Hash password before saving if modified
+// Hash password and assign short userCode before saving
 userSchema.pre('save', async function () {
+  // 1. Assign unique 6-digit user code if not present
+  if (!this.userCode) {
+    let isUnique = false;
+    let code = '';
+    let attempts = 0;
+    while (!isUnique && attempts < 30) {
+      attempts++;
+      code = Math.floor(100000 + Math.random() * 900000).toString();
+      const existing = await mongoose.model('User').findOne({ userCode: code }).select('_id');
+      if (!existing) {
+        isUnique = true;
+      }
+    }
+    this.userCode = isUnique ? code : Math.floor(1000000 + Math.random() * 9000000).toString();
+  }
+
+  // 2. Hash password if modified
   if (!this.isModified('password')) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);

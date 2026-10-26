@@ -340,6 +340,17 @@ export const autoSyncOnStartup = async () => {
     await seedLegacyOverrides().catch(() => {});
     const result = await syncAllProducts();
     console.log('✅ [AutoSync] Sync completed successfully:', result);
+
+    // Auto-migrate any custom products created with '$' or null to 'BOTH' so all users see them
+    try {
+      const customMigrate = await Product.updateMany(
+        { source: 'custom', currency: { $in: ['$', 'USD', null] } },
+        { $set: { currency: 'BOTH' } }
+      );
+      if (customMigrate.modifiedCount > 0) {
+        console.log(`✅ [AutoSync] Migrated ${customMigrate.modifiedCount} custom products to 'BOTH' currencies.`);
+      }
+    } catch (_) {}
   } catch (err) {
     console.error('❌ [AutoSync] Failed on startup:', err.message);
   }
@@ -555,28 +566,44 @@ export const buildCurrencyProductFilter = (currencyStr) => {
   if (!currencyStr) return null;
   const c = String(currencyStr).trim().toUpperCase();
   if (c === 'SYP' || c === 'ل.س' || c === 'ليرة' || c === 'SYRIAN POUND') {
-    // SYP USER: Strict isolation - NO Dollar source or Dollar currency allowed!
+    // SYP USER: Strict isolation for providers, but include custom provider products if SYP or BOTH/ALL
     return {
-      $and: [
-        { source: { $nin: ['roya_usd', 'sw_games'] } },
-        { currency: { $nin: ['$', 'USD', 'usd'] } },
+      $or: [
         {
-          $or: [
-            { source: 'roya_syp' },
-            { currency: { $in: ['ل.س', 'SYP', 'syp'] } },
-            { sourceName: { $regex: 'ليرة', $options: 'i' } },
+          $and: [
+            { source: { $nin: ['roya_usd', 'sw_games'] } },
+            { currency: { $nin: ['$', 'USD', 'usd'] } },
+            {
+              $or: [
+                { source: 'roya_syp' },
+                { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL'] } },
+                { sourceName: { $regex: 'ليرة', $options: 'i' } },
+              ],
+            },
           ],
+        },
+        {
+          source: 'custom',
+          currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] },
         },
       ],
     };
   }
   if (c === 'USD' || c === '$' || c === 'دولار') {
-    // USD USER: Strict isolation - NO Lira source or Lira currency allowed!
+    // USD USER: Strict isolation for providers, but include custom provider products if USD or BOTH/ALL
     return {
-      $and: [
-        { source: { $ne: 'roya_syp' } },
-        { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
-        { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+      $or: [
+        {
+          $and: [
+            { source: { $ne: 'roya_syp' } },
+            { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
+            { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+          ],
+        },
+        {
+          source: 'custom',
+          currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] },
+        },
       ],
     };
   }
@@ -1355,6 +1382,16 @@ export const createCustomProduct = async (data) => {
 
   const externalId = `CUST-${Date.now().toString(36)}-${Math.floor(100 + Math.random() * 900)}`;
 
+  let resolvedCurrency = 'BOTH';
+  const currNorm = (currency || '').trim().toUpperCase();
+  if (currNorm === 'SYP' || currNorm === 'ل.س' || currNorm === 'ليرة') {
+    resolvedCurrency = 'ل.س';
+  } else if (currNorm === 'USD' || currNorm === '$') {
+    resolvedCurrency = '$';
+  } else {
+    resolvedCurrency = 'BOTH';
+  }
+
   const product = await Product.create({
     externalId,
     source: 'custom',
@@ -1366,7 +1403,7 @@ export const createCustomProduct = async (data) => {
     originalPrice: cost,
     price: finalSellingPrice,
     sellingPrice: finalSellingPrice,
-    currency: currency === 'ل.س' || currency === 'SYP' ? 'ل.س' : '$',
+    currency: resolvedCurrency,
     image: image?.trim() || '',
     isAvailable: isAvailable !== false,
     isVisible: isVisible !== false,
@@ -1414,7 +1451,16 @@ export const updateCustomProduct = async (id, data) => {
     product.sellingPrice = Number(price);
   }
   if (sellingPrice !== undefined) product.sellingPrice = Number(sellingPrice);
-  if (currency !== undefined) product.currency = currency === 'ل.س' || currency === 'SYP' ? 'ل.س' : '$';
+  if (currency !== undefined) {
+    const currNorm = (currency || '').trim().toUpperCase();
+    if (currNorm === 'SYP' || currNorm === 'ل.س' || currNorm === 'ليرة') {
+      product.currency = 'ل.س';
+    } else if (currNorm === 'USD' || currNorm === '$') {
+      product.currency = '$';
+    } else {
+      product.currency = 'BOTH';
+    }
+  }
   if (image !== undefined) product.image = image.trim();
   if (isAvailable !== undefined) product.isAvailable = Boolean(isAvailable);
   if (isVisible !== undefined) product.isVisible = Boolean(isVisible);

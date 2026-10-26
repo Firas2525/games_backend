@@ -5,8 +5,27 @@ import { Transaction } from '../users/transactions.model.js';
 import { Product } from '../products/products.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
-import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
+
+export async function generateShortOrderId() {
+  let isUnique = false;
+  let code = '';
+  let attempts = 0;
+  while (!isUnique && attempts < 30) {
+    attempts++;
+    // Clean 6-digit unique order code (100000 - 999999)
+    code = Math.floor(100000 + Math.random() * 900000).toString();
+    const existing = await Order.findOne({ orderId: code }).select('_id');
+    if (!existing) {
+      isUnique = true;
+    }
+  }
+  if (!isUnique) {
+    // 7-digit fallback if high density
+    code = Math.floor(1000000 + Math.random() * 9000000).toString();
+  }
+  return code;
+}
 
 export const executePurchase = async ({
   userId,
@@ -141,8 +160,8 @@ export const executePurchase = async ({
   user.totalProfit = Number(((user.totalProfit || 0) + profit).toFixed(4));
   await user.save();
 
-  // 5. Generate unique order ID
-  const orderId = `ORD-${Date.now().toString().slice(-6)}${Math.floor(1000 + Math.random() * 9000)}`;
+  // 5. Generate clean 6 to 7 digit unique order ID
+  const orderId = await generateShortOrderId();
 
   // 6. Dispatch order to external Provider API (SW Games / Brand1Card / Auto1Card)
   const basePayload = {
@@ -729,5 +748,85 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
 
   await order.save();
   return order;
+};
+
+/**
+ * Handle incoming real-time Webhook notifications from Roya (SW Games)
+ */
+export const handleRoyaWebhook = async (data = {}) => {
+  console.log('[Roya Webhook] Received payload:', JSON.stringify(data));
+  const orderIdOrUuid =
+    data.order_uuid || data.uuid || data.order_id || data.order_number || data.id;
+
+  if (!orderIdOrUuid) {
+    return { ok: true, message: 'No order identifier found, acknowledged.' };
+  }
+
+  const rawIdStr = String(orderIdOrUuid).trim();
+  const cleanOrderId = rawIdStr.includes('-') ? rawIdStr.split('-')[0] : rawIdStr;
+
+  const order = await Order.findOne({
+    $or: [
+      { providerOrderId: rawIdStr },
+      { orderId: cleanOrderId },
+      { orderId: rawIdStr },
+    ],
+  });
+
+  if (!order) {
+    console.warn(`[Roya Webhook] No matching order found for ID/UUID: ${orderIdOrUuid}`);
+    return { ok: true, message: 'Order not found in database, acknowledged.' };
+  }
+
+  const rawStatus = String(
+    data.status || data.order_status || data.status_name || ''
+  ).toLowerCase();
+
+  // 1. Success / Completed
+  if (
+    ['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted', 'تم', 'منجز', 'مكتمل'].includes(
+      rawStatus
+    )
+  ) {
+    order.status = 'completed';
+    order.providerResponse = data;
+    await order.save();
+    console.log(`[Roya Webhook] Order #${order.orderId} successfully completed.`);
+    return { ok: true, status: 'completed' };
+  }
+
+  // 2. Failed / Cancelled -> auto refund wallet
+  if (
+    [
+      '2',
+      '3',
+      'cancelled',
+      'canceled',
+      'cancel',
+      'failed',
+      'fail',
+      'error',
+      'rejected',
+      'refused',
+      'ملغي',
+      'فشل',
+      'مرفوض',
+    ].includes(rawStatus) ||
+    data.error ||
+    data.ok === false
+  ) {
+    await refundOrderWallet(order, { rawData: data });
+    console.log(`[Roya Webhook] Order #${order.orderId} failed, wallet refunded.`);
+    return { ok: true, status: 'failed_and_refunded' };
+  }
+
+  // 3. In Progress / Processing
+  if (order.status !== 'completed' && order.status !== 'failed') {
+    order.status = 'processing';
+    order.providerResponse = data;
+    await order.save();
+  }
+
+  return { ok: true, status: order.status };
 };
 

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { User } from './users.model.js';
 import { Transaction } from './transactions.model.js';
 import { ApiError } from '../../utils/apiError.js';
@@ -6,15 +7,65 @@ import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 export const getAllUsers = async (query = {}) => {
   const filter = {};
   if (query.role) filter.role = query.role;
+  if (query.search) {
+    const s = query.search.trim();
+    filter.$or = [
+      { name: { $regex: s, $options: 'i' } },
+      { email: { $regex: s, $options: 'i' } },
+      { phone: { $regex: s, $options: 'i' } },
+      { userCode: { $regex: s, $options: 'i' } },
+    ];
+  }
   return await User.find(filter).sort({ createdAt: -1 });
 };
 
 export const getUserById = async (id) => {
-  const user = await User.findById(id);
+  let user;
+  if (mongoose.isValidObjectId(id)) {
+    user = await User.findById(id);
+  }
+  if (!user) {
+    user = await User.findOne({ userCode: id.toString().trim() });
+  }
   if (!user) {
     throw new ApiError('User not found', HTTP_STATUS.NOT_FOUND);
   }
   return user;
+};
+
+// Automatic startup migration to ensure all existing users have unique 6-digit userCodes
+export const ensureShortUserCodes = async () => {
+  try {
+    const usersWithoutCode = await User.find({
+      $or: [
+        { userCode: { $exists: false } },
+        { userCode: null },
+        { userCode: '' },
+      ],
+    });
+
+    if (usersWithoutCode.length > 0) {
+      console.log(`[Users Migration] Generating 6-digit user codes for ${usersWithoutCode.length} users...`);
+      for (const u of usersWithoutCode) {
+        let isUnique = false;
+        let code = '';
+        let attempts = 0;
+        while (!isUnique && attempts < 30) {
+          attempts++;
+          code = Math.floor(100000 + Math.random() * 900000).toString();
+          const existing = await User.findOne({ userCode: code }).select('_id');
+          if (!existing) {
+            isUnique = true;
+          }
+        }
+        u.userCode = isUnique ? code : Math.floor(1000000 + Math.random() * 9000000).toString();
+        await u.save();
+      }
+      console.log(`[Users Migration] Successfully assigned 6-digit user codes.`);
+    }
+  } catch (err) {
+    console.error('[Users Migration] Failed to populate user codes:', err.message);
+  }
 };
 
 export const toggleUserStatus = async (id) => {

@@ -2,10 +2,14 @@ import app from './app.js';
 import { connectDB } from './config/db.js';
 import { ENV } from './config/env.js';
 import { autoSyncOnStartup } from './modules/products/products.service.js';
+import { ensureShortUserCodes } from './modules/users/users.service.js';
 
 const startServer = async () => {
   // Connect to Database
   await connectDB();
+
+  // Ensure all users have short unique 6-digit codes
+  ensureShortUserCodes();
 
   // Run catalog synchronization & categorization on startup
   autoSyncOnStartup();
