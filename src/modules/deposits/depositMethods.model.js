@@ -23,6 +23,11 @@ const depositMethodSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    imageUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     currency: {
       type: String,
       enum: ['USD', 'SYP'],
