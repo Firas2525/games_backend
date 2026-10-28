@@ -7,6 +7,7 @@ import { Category } from '../products/categories.model.js';
 import { SubCategory } from '../products/subcategories.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
+import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
 
 export async function generateShortOrderId() {
@@ -708,7 +709,13 @@ export const getCustomOrdersAdmin = async (query = {}) => {
  * Admin: Complete custom provider order
  */
 export const completeCustomOrder = async (orderId, { adminNote = '', responseData = null } = {}) => {
-  const order = await Order.findOne({ orderId, source: 'custom' });
+  const order = await Order.findOne({
+    $or: [
+      { orderId: String(orderId) },
+      ...(mongoose.isValidObjectId(orderId) ? [{ _id: orderId }] : []),
+    ],
+    source: 'custom',
+  });
   if (!order) {
     throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
   }
@@ -738,7 +745,13 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
  * Admin: Reject / Cancel custom provider order and automatically refund user wallet
  */
 export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject = false } = {}) => {
-  const order = await Order.findOne({ orderId, source: 'custom' });
+  const order = await Order.findOne({
+    $or: [
+      { orderId: String(orderId) },
+      ...(mongoose.isValidObjectId(orderId) ? [{ _id: orderId }] : []),
+    ],
+    source: 'custom',
+  });
   if (!order) {
     throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
   }
