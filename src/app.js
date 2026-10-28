@@ -13,6 +13,7 @@ import ordersRoutes from './modules/orders/orders.routes.js';
 import logsRoutes from './modules/logs/logs.routes.js';
 import depositsRoutes from './modules/deposits/deposits.routes.js';
 import notificationsRoutes from './modules/notifications/notifications.routes.js';
+import favoritesRoutes from './modules/favorites/favorites.routes.js';
 import { auditLogMiddleware } from './middlewares/auditLog.middleware.js';
 import { notFoundHandler, globalErrorHandler } from './middlewares/error.middleware.js';
 import { ApiResponse } from './utils/apiResponse.js';
@@ -118,6 +119,7 @@ app.use('/api/v1/orders', ordersRoutes);
 app.use('/api/v1/logs', logsRoutes);
 app.use('/api/v1/deposits', depositsRoutes);
 app.use('/api/v1/notifications', notificationsRoutes);
+app.use('/api/v1/favorites', favoritesRoutes);
 
 // Error handlers
 app.use(notFoundHandler);
