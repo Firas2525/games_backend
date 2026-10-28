@@ -7,6 +7,7 @@ import {
   deduct,
   getTransactions,
   getMyTransactions,
+  getMyFinancialSummary,
   getAllTransactionsHandler,
   changePassword,
 } from './users.controller.js';
@@ -17,8 +18,9 @@ import { ROLES } from '../../constants/roles.js';
 
 const router = Router();
 
-// Endpoint for any logged-in user to see their balance history
+// Endpoints for any logged-in user to see their balance history and financial overview
 router.get('/me/transactions', authenticate, getMyTransactions);
+router.get('/me/financial-summary', authenticate, getMyFinancialSummary);
 
 // Admin-only routes
 router.use(authenticate, authorize(ROLES.ADMIN));

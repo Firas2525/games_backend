@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { User } from './users.model.js';
 import { Transaction } from './transactions.model.js';
+import { Deposit } from '../deposits/deposits.model.js';
+import { Order } from '../orders/orders.model.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
@@ -86,6 +88,7 @@ export const depositBalance = async ({ userId, amount, note = '', adminId }) => 
   const newBalance = Number((previousBalance + parsedAmount).toFixed(2));
 
   user.balance = newBalance;
+  user.totalDeposited = Number(((user.totalDeposited || 0) + parsedAmount).toFixed(4));
   await user.save();
 
   const transaction = await Transaction.create({
@@ -170,5 +173,91 @@ export const updateUserPassword = async (userId, newPassword) => {
 
   return user.toJSON();
 };
+
+/**
+  * Calculate and retrieve user financial summary:
+  * - Total deposits (sum of accepted deposits + manual deposits)
+  * - Total spent / purchases (sum of purchases)
+  * - Current available balance
+  * - Count of operations
+  */
+export const getUserFinancialSummary = async (userId) => {
+  const uid = mongoose.isValidObjectId(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+  const user = await User.findById(uid);
+  if (!user) {
+    throw new ApiError('المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  // 1. Calculate total accepted deposits & counts from Deposit collection
+  const depositStats = await Deposit.aggregate([
+    { $match: { userId: uid } },
+    {
+      $group: {
+        _id: '$status',
+        total: { $sum: '$netAmount' },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  let depositAcceptedTotal = 0;
+  let pendingCount = 0;
+  let acceptedCount = 0;
+  let rejectedCount = 0;
+
+  for (const s of depositStats) {
+    if (s._id === 'accepted') {
+      depositAcceptedTotal = s.total || 0;
+      acceptedCount = s.count || 0;
+    } else if (s._id === 'pending') {
+      pendingCount = s.count || 0;
+    } else if (s._id === 'rejected') {
+      rejectedCount = s.count || 0;
+    }
+  }
+
+  // 2. Also check Transaction collection for all deposit transactions
+  const txDepositAgg = await Transaction.aggregate([
+    { $match: { userId: uid, type: 'deposit' } },
+    { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+  ]);
+  const txDepositTotal = txDepositAgg[0]?.total || 0;
+
+  // Total deposited is maximum of tracked user field, deposits aggregate, or transaction aggregate
+  const totalDeposited = Number(
+    Math.max(user.totalDeposited || 0, depositAcceptedTotal, txDepositTotal).toFixed(2)
+  );
+
+  // 3. Calculate total spent / purchases from Order collection
+  const orderSpentAgg = await Order.aggregate([
+    {
+      $match: {
+        userId: uid,
+        status: { $in: ['completed', 'pending', 'processing'] },
+        refunded: { $ne: true },
+      },
+    },
+    { $group: { _id: null, total: { $sum: '$userPrice' }, count: { $sum: 1 } } },
+  ]);
+  const orderSpentTotal = orderSpentAgg[0]?.total || 0;
+
+  // Total spent / purchases is max of user.totalSpent and orders aggregation
+  const totalSpent = Number(Math.max(user.totalSpent || 0, orderSpentTotal).toFixed(2));
+
+  return {
+    balance: Number((user.balance || 0).toFixed(2)),
+    currency: user.currency || 'USD',
+    totalDeposited,
+    totalSpent,
+    totalOrders: orderSpentAgg[0]?.count || 0,
+    depositsCount: {
+      total: pendingCount + acceptedCount + rejectedCount,
+      accepted: acceptedCount,
+      pending: pendingCount,
+      rejected: rejectedCount,
+    },
+  };
+};
+
 
 

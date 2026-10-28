@@ -63,6 +63,10 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    totalDeposited: {
+      type: Number,
+      default: 0,
+    },
     totalProfit: {
       type: Number,
       default: 0,

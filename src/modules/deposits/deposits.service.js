@@ -300,7 +300,38 @@ export const createDepositRequest = async ({
  * Returns deposit history for specific user
  */
 export const getUserDeposits = async (userId) => {
-  return await Deposit.find({ userId }).sort({ createdAt: -1 });
+  const [deposits, directTransactions] = await Promise.all([
+    Deposit.find({ userId }).sort({ createdAt: -1 }).lean(),
+    Transaction.find({
+      userId,
+      type: 'deposit',
+      note: { $not: /قبول إيداع/ },
+    })
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
+
+  const mappedDirect = directTransactions.map((tx) => ({
+    _id: tx._id,
+    depositId: tx._id.toString().slice(-6).toUpperCase(),
+    userId: tx.userId,
+    methodKey: 'direct_admin',
+    methodTitle: 'إيداع رصيد من الإدارة',
+    amount: tx.amount,
+    netAmount: tx.amount,
+    feePercent: 0,
+    feeAmount: 0,
+    sourceCurrency: tx.currency || 'USD',
+    creditCurrency: tx.currency || 'USD',
+    operationNumber: tx._id.toString().slice(-8),
+    note: tx.note || 'شحن رصيد مباشر من الإدارة',
+    status: 'accepted',
+    createdAt: tx.createdAt,
+  }));
+
+  const all = [...deposits, ...mappedDirect];
+  all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return all;
 };
 
 /**
