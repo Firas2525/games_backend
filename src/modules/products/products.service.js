@@ -1364,7 +1364,7 @@ export const getProductDetails = async (id, userCurrency = null) => {
 
         return {
           product,
-          source: 'syria_card',
+          source: product.source || 'brand1card',
           packages,
         };
       }

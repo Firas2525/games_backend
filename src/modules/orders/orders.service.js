@@ -59,17 +59,22 @@ export const executePurchase = async ({
   let finalImage = image || '';
   let source = 'custom';
 
+  if (productId) {
+    product = await Product.findById(productId);
+  }
+
   if (packageId) {
-    packageProduct = await Product.findOne({
+    const pkgQuery = {
       $or: [
         { externalId: String(packageId) },
         ...(mongoose.isValidObjectId(packageId) ? [{ _id: packageId }] : []),
       ],
-    });
-  }
-
-  if (productId) {
-    product = await Product.findById(productId);
+    };
+    // Lock package search to the product's source so Brand packages never match a Roya item
+    if (product?.source) {
+      pkgQuery.source = product.source;
+    }
+    packageProduct = await Product.findOne(pkgQuery);
   }
 
   const activeItem = packageProduct || product;
@@ -78,8 +83,10 @@ export const executePurchase = async ({
     finalProductName = activeItem.name || finalProductName;
     finalCategory = activeItem.category || finalCategory;
     finalImage = activeItem.image || finalImage;
-    source = activeItem.source || source;
   }
+
+  // The authoritative provider source
+  source = product?.source || packageProduct?.source || activeItem?.source || 'custom';
 
   // 1.1 Strict Currency & Source Matching Check (Lira vs Dollar isolation)
   const userCurrency = (user.currency || 'USD').toUpperCase();
