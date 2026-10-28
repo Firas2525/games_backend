@@ -790,40 +790,65 @@ export const deleteCategory = async (id) => {
   return { message: 'تم حذف القسم بنجاح وإعادة تعيين المنتجات التابعة له', id };
 };
 
-// 6. Admin: Update Main Category manually (Sets isCategoryOverridden = true)
-export const updateProductMainCategory = async (id, mainCategory) => {
-  if (!mainCategory || !mainCategory.trim()) {
-    throw new ApiError('التصنيف الرئيسي مطلوب', HTTP_STATUS.BAD_REQUEST);
-  }
+// 6. Admin: Update Main Category & Sub Category (Sets isCategoryOverridden = true)
+export const updateProductMainCategory = async (id, dataOrMainCat) => {
+  let mainCategory = typeof dataOrMainCat === 'string' ? dataOrMainCat : dataOrMainCat?.mainCategory;
+  let subCategoryName = typeof dataOrMainCat === 'object' ? (dataOrMainCat.subCategoryName || dataOrMainCat.category) : null;
+  let subCategoryImage = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryImage : null;
+  let subCategoryId = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryId : null;
 
   const product = await Product.findById(id);
   if (!product) {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
   }
 
-  product.mainCategory = mainCategory.trim();
+  if (mainCategory && mainCategory.trim()) {
+    product.mainCategory = mainCategory.trim();
+  }
+  if (subCategoryName && subCategoryName.trim()) {
+    product.subCategoryName = subCategoryName.trim();
+    product.category = subCategoryName.trim();
+  }
+  if (subCategoryImage !== undefined && subCategoryImage !== null) {
+    product.subCategoryImage = subCategoryImage.trim();
+  }
+  if (subCategoryId !== undefined) {
+    product.subCategoryId = subCategoryId || null;
+  }
+
   product.isCategoryOverridden = true;
   await product.save();
   return product;
 };
 
-// 6.1 Admin: Bulk update category for selected items (Batch Move)
-export const bulkUpdateProductsCategory = async (productIds, mainCategory) => {
+// 6.1 Admin: Bulk update category & subcategory for selected items (Batch Move)
+export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
+  let mainCategory = typeof dataOrMainCat === 'string' ? dataOrMainCat : dataOrMainCat?.mainCategory;
+  let subCategoryName = typeof dataOrMainCat === 'object' ? (dataOrMainCat.subCategoryName || dataOrMainCat.category) : null;
+  let subCategoryImage = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryImage : null;
+  let subCategoryId = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryId : null;
+
   if (!Array.isArray(productIds) || productIds.length === 0) {
     throw new ApiError('يجب تحديد عنصر واحد على الأقل لنقله', HTTP_STATUS.BAD_REQUEST);
   }
-  if (!mainCategory || !mainCategory.trim()) {
-    throw new ApiError('يجب اختيار القسم الهدف', HTTP_STATUS.BAD_REQUEST);
+
+  const updateFields = { isCategoryOverridden: true };
+  if (mainCategory && mainCategory.trim()) updateFields.mainCategory = mainCategory.trim();
+  if (subCategoryName && subCategoryName.trim()) {
+    updateFields.subCategoryName = subCategoryName.trim();
+    updateFields.category = subCategoryName.trim();
   }
+  if (subCategoryImage !== undefined && subCategoryImage !== null) updateFields.subCategoryImage = subCategoryImage.trim();
+  if (subCategoryId !== undefined) updateFields.subCategoryId = subCategoryId || null;
 
   const result = await Product.updateMany(
     { _id: { $in: productIds } },
-    { $set: { mainCategory: mainCategory.trim(), isCategoryOverridden: true } }
+    { $set: updateFields }
   );
 
   return {
     modifiedCount: result.modifiedCount,
-    mainCategory: mainCategory.trim(),
+    ...updateFields,
   };
 };
 
@@ -876,7 +901,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null) => {
     productsBySubId[sId].push(p);
   }
 
-  return subCategories.map((sc) => {
+  const result = subCategories.map((sc) => {
     const scProducts = productsBySubId[sc._id.toString()] || [];
     const validPrices = scProducts
       .map((p) => (p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price && p.price > 0 ? p.price : (p.originalPrice || 0))))
@@ -892,6 +917,40 @@ export const getSubCategories = async (mainCategory, userCurrency = null) => {
       currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
     };
   });
+
+  // Also include distinct categories from products under this mainCategory if not already in subCategories
+  const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
+  const productQuery = { isVisible: true };
+  if (mainCategory && mainCategory !== 'all') {
+    productQuery.mainCategory = mainCategory;
+  }
+  const distinctProductCats = await Product.aggregate([
+    { $match: productQuery },
+    { $group: { _id: '$category', count: { $sum: 1 }, sampleImage: { $first: '$image' } } },
+    { $sort: { count: -1 } },
+  ]);
+
+  for (const item of distinctProductCats) {
+    const catName = item._id?.trim();
+    if (!catName || catName === 'عام' || catName === 'Uncategorized') continue;
+    if (!existingNames.has(catName.toLowerCase())) {
+      existingNames.add(catName.toLowerCase());
+      result.push({
+        _id: null,
+        id: null,
+        mainCategory: mainCategory || 'games',
+        name: catName,
+        imageUrl: item.sampleImage || '',
+        productCount: item.count,
+        products: [],
+        startingPrice: 0,
+        currency: '$',
+        isDynamic: true,
+      });
+    }
+  }
+
+  return result;
 };
 
 export const createSubCategory = async (data) => {

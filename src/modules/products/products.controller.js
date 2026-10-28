@@ -45,9 +45,9 @@ export const bulkVisibility = asyncHandler(async (req, res) => {
 export const updateCategory = asyncHandler(async (req, res) => {
   const product = await productsService.updateProductMainCategory(
     req.params.id,
-    req.body.mainCategory
+    req.body
   );
-  return ApiResponse.success(res, product, 'تم تحديث التصنيف الرئيسي للمنتج بنجاح');
+  return ApiResponse.success(res, product, 'تم تحديث تصنيف المنتج بنجاح');
 });
 
 export const updateCategoryGroup = asyncHandler(async (req, res) => {
@@ -89,8 +89,8 @@ export const removeCategory = asyncHandler(async (req, res) => {
 });
 
 export const bulkUpdateCategory = asyncHandler(async (req, res) => {
-  const { productIds, mainCategory } = req.body;
-  const result = await productsService.bulkUpdateProductsCategory(productIds, mainCategory);
+  const { productIds } = req.body;
+  const result = await productsService.bulkUpdateProductsCategory(productIds, req.body);
   return ApiResponse.success(res, result, `تم نقل ${result.modifiedCount} منتج بنجاح`);
 });
 
