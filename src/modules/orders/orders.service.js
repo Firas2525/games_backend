@@ -358,22 +358,31 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   }
   await order.save();
 
-  await Transaction.create({
-    userId: order.userId,
-    type: 'refund',
-    currency: user.currency || order.currency || 'USD',
-    amount: refundAmount,
-    costPrice: order.costPrice || 0,
-    profit: order.profit || 0,
-    productName: order.productName,
-    targetId: order.targetId || '',
-    orderId: order.orderId,
-    previousBalance: prevBal,
-    newBalance: newBal,
-    note:
-      customNote ||
-      `استرجاع رصيد تلقائي لإلغاء/فشل الطلب من المزود (#${resultData?.providerOrderNumber || order.providerOrderId || order.orderId}): ${order.productName} (تم استرجاع ${refundAmount} ${order.currency || 'USD'} متضمنة نسبة الربح كاملة)`,
-  });
+  // Normalize currency to prevent Transaction schema validation failure
+  const normalizedCurrency = (user?.currency === 'SYP' || order?.currency === 'SYP' || order?.currency === 'ل.س') ? 'SYP' : 'USD';
+
+  try {
+    if (refundAmount > 0) {
+      await Transaction.create({
+        userId: order.userId,
+        type: 'refund',
+        currency: normalizedCurrency,
+        amount: Math.max(0.0001, refundAmount),
+        costPrice: order.costPrice || 0,
+        profit: order.profit || 0,
+        productName: order.productName || 'طلب شحن',
+        targetId: order.targetId || '',
+        orderId: order.orderId,
+        previousBalance: prevBal,
+        newBalance: newBal,
+        note:
+          customNote ||
+          `استرجاع رصيد تلقائي لإلغاء/فشل الطلب (#${resultData?.providerOrderNumber || order.providerOrderId || order.orderId}): ${order.productName || ''} (تم استرجاع ${refundAmount} ${normalizedCurrency} متضمنة نسبة الربح كاملة)`,
+      });
+    }
+  } catch (txErr) {
+    console.error('[refundOrderWallet] Transaction logging failed (non-fatal):', txErr.message);
+  }
 
   return true;
 };
@@ -645,23 +654,43 @@ export const getFinancialStatsAdmin = async () => {
  * Admin: Get all orders for 'مزودي الخاص' (custom provider) with stats and filters
  */
 export const getCustomOrdersAdmin = async (query = {}) => {
-  const filter = { source: 'custom' };
+  const customMatch = {
+    $or: [
+      { source: 'custom' },
+      { 'providerPayload.isManual': true },
+      { 'providerPayload.provider': 'مزودي الخاص' },
+      { source: { $in: ['', null] } },
+    ],
+  };
+
+  const filter = { ...customMatch };
 
   if (query.status && query.status !== 'all') {
-    filter.status = query.status;
+    if (query.status === 'rejected') {
+      filter.status = 'failed';
+    } else if (query.status === 'pending') {
+      filter.status = { $in: ['pending', 'processing'] };
+    } else {
+      filter.status = query.status;
+    }
   }
 
   if (query.search && query.search.trim()) {
     const s = query.search.trim();
-    filter.$or = [
-      { orderId: { $regex: s, $options: 'i' } },
-      { productName: { $regex: s, $options: 'i' } },
-      { targetId: { $regex: s, $options: 'i' } },
+    filter.$and = [
+      customMatch,
+      {
+        $or: [
+          { orderId: { $regex: s, $options: 'i' } },
+          { productName: { $regex: s, $options: 'i' } },
+          { targetId: { $regex: s, $options: 'i' } },
+        ],
+      },
     ];
   }
 
   const page = parseInt(query.page, 10) || 1;
-  const limit = parseInt(query.limit, 10) || 50;
+  const limit = parseInt(query.limit, 10) || 100;
   const skip = (page - 1) * limit;
 
   const [orders, total, countsAgg] = await Promise.all([
@@ -673,7 +702,7 @@ export const getCustomOrdersAdmin = async (query = {}) => {
       .lean(),
     Order.countDocuments(filter),
     Order.aggregate([
-      { $match: { source: 'custom' } },
+      { $match: customMatch },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
   ]);
@@ -684,14 +713,18 @@ export const getCustomOrdersAdmin = async (query = {}) => {
     completed: 0,
     cancelled: 0,
     failed: 0,
+    rejected: 0,
   };
 
   for (const item of countsAgg) {
     if (item._id) {
-      stats[item._id] = item.count;
+      stats[item._id] = (stats[item._id] || 0) + item.count;
       stats.all += item.count;
     }
   }
+
+  stats.pending = (stats.pending || 0) + (stats.processing || 0);
+  stats.rejected = (stats.failed || 0);
 
   return {
     orders,
@@ -702,6 +735,7 @@ export const getCustomOrdersAdmin = async (query = {}) => {
       totalPages: Math.ceil(total / limit) || 1,
     },
     stats,
+    counts: stats, // Frontend reads data['counts']
   };
 };
 
@@ -714,14 +748,13 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
       { orderId: String(orderId) },
       ...(mongoose.isValidObjectId(orderId) ? [{ _id: orderId }] : []),
     ],
-    source: 'custom',
   });
   if (!order) {
-    throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
+    throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
   if (order.status === 'completed') {
-    return order;
+    return order.toJSON ? order.toJSON() : order;
   }
 
   if (order.refunded || order.status === 'cancelled') {
@@ -738,7 +771,7 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
   };
 
   await order.save();
-  return order;
+  return order.toJSON ? order.toJSON() : order;
 };
 
 /**
@@ -750,14 +783,14 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
       { orderId: String(orderId) },
       ...(mongoose.isValidObjectId(orderId) ? [{ _id: orderId }] : []),
     ],
-    source: 'custom',
   });
   if (!order) {
-    throw new ApiError('الطلب غير موجود في قائمة مزودي الخاص', HTTP_STATUS.NOT_FOUND);
+    throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  if (order.refunded || order.status === 'cancelled') {
-    throw new ApiError('تم إلغاء واسترجاع هذا الطلب مسبقاً', HTTP_STATUS.BAD_REQUEST);
+  // If already refunded and marked, return cleanly to prevent false error alerts
+  if (order.refunded && (order.status === 'failed' || order.status === 'cancelled')) {
+    return order.toJSON ? order.toJSON() : order;
   }
 
   const actionText = isReject ? 'رفض الطلب' : 'إلغاء الطلب';
@@ -776,7 +809,7 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
   };
 
   await order.save();
-  return order;
+  return order.toJSON ? order.toJSON() : order;
 };
 
 /**
