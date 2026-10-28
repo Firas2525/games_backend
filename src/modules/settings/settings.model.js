@@ -13,6 +13,15 @@ const settingsSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    tickerText: {
+      type: String,
+      default: 'أهلاً بكم في متجر الألعاب! شحن فوري وآلي لكافة الألعاب والبطاقات الرقمية على مدار الساعة.',
+      trim: true,
+    },
+    isTickerActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
     timestamps: true,
