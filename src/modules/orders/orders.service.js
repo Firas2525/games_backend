@@ -10,7 +10,7 @@ import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
 
-export async function generateShortOrderId() {
+export const generateShortOrderId = async () => {
   let isUnique = false;
   let code = '';
   let attempts = 0;
@@ -28,7 +28,7 @@ export async function generateShortOrderId() {
     code = Math.floor(1000000 + Math.random() * 9000000).toString();
   }
   return code;
-}
+};
 
 export const executePurchase = async ({
   userId,

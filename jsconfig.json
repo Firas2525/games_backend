@@ -1,9 +1,0 @@
-{
-  "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "target": "ESNext",
-    "checkJs": false
-  },
-  "include": ["src/**/*"]
-}
