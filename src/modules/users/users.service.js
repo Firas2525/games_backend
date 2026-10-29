@@ -147,14 +147,21 @@ export const deductBalance = async ({ userId, amount, note = '', adminId }) => {
 };
 
 export const getUserTransactions = async (userId) => {
-  return await Transaction.find({ userId })
+  return await Transaction.find({ userId, type: { $ne: 'deposit_request' } })
     .populate('adminId', 'name email')
     .sort({ createdAt: -1 });
 };
 
 export const getAllTransactions = async (query = {}) => {
-  const filter = {};
-  if (query.type) filter.type = query.type;
+  // Purge any lingering legacy unapproved deposit_request entries from Transaction ledger
+  try {
+    await Transaction.deleteMany({ type: 'deposit_request' });
+  } catch (_) {}
+
+  const filter = { type: { $ne: 'deposit_request' } };
+  if (query.type && query.type !== 'all') {
+    filter.type = query.type;
+  }
   return await Transaction.find(filter)
     .populate('userId', 'name email avatar')
     .populate('adminId', 'name email')

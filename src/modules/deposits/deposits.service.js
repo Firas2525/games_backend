@@ -309,24 +309,6 @@ export const createDepositRequest = async ({
     status: 'pending',
   });
 
-  // Create pending transaction audit log
-  const txNote = (userCurrency === 'USD' && methodCurrency === 'SYP')
-    ? `طلب إيداع قيد المراجعة عبر ${method.title} (${cleanAmount} ل.س = معادل ${netAmount} $ بسعر صرف 1$ = ${appliedRate} ل.س) - رقم العملية: ${cleanOperation}`
-    : `طلب إيداع قيد المراجعة عبر ${method.title} (${cleanAmount} ${method.currency}) - رقم العملية: ${cleanOperation}`;
-
-  const transaction = await Transaction.create({
-    userId: user._id,
-    type: 'deposit_request',
-    currency: creditCurrency,
-    amount: netAmount,
-    previousBalance: user.balance || 0,
-    newBalance: user.balance || 0,
-    note: txNote,
-  });
-
-  deposit.transactionId = transaction._id;
-  await deposit.save();
-
   return deposit.toJSON();
 };
 
@@ -450,7 +432,7 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
     ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ل.س = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
     : `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`;
 
-  await Transaction.create({
+  const transaction = await Transaction.create({
     userId: user._id,
     adminId: mongoose.isValidObjectId(adminId) ? adminId : null,
     type: 'deposit',
@@ -460,6 +442,9 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
     newBalance: newBal,
     note: acceptNote,
   });
+
+  deposit.transactionId = transaction._id;
+  await deposit.save();
 
   return {
     ok: true,
