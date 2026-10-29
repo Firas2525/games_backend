@@ -108,6 +108,14 @@ app.all(['/roya_webhook', '/api/v1/orders/webhook/roya'], async (req, res) => {
 // Audit logging middleware for every API operation
 app.use('/api/v1', auditLogMiddleware);
 
+// Normalize duplicated /api/v1/api/v1 paths if any legacy/cached client calls them
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/v1/api/v1')) {
+    req.url = req.url.replace('/api/v1/api/v1', '/api/v1');
+  }
+  next();
+});
+
 // API Routes (version 1)
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/games', gamesRoutes);
