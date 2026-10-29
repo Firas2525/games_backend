@@ -41,6 +41,9 @@ export const executePurchase = async ({
   extraFields = {},
   quantity = 1,
   clientBasePrice,
+  userPrice,
+  price,
+  amount,
   currency = '$',
 }) => {
   const user = await User.findById(userId);
@@ -132,12 +135,16 @@ export const executePurchase = async ({
   }
   const discountPercent = activeItem?.discountPercent || product?.discountPercent || 0;
 
+  const incomingClientPrice = Number(clientBasePrice || userPrice || price || amount || 0);
+
   const baseCost =
     activeItem?.originalPrice && activeItem.originalPrice > 0
       ? activeItem.originalPrice
       : activeItem?.sellingPrice && activeItem.sellingPrice > 0
       ? activeItem.sellingPrice
-      : activeItem?.price || 0;
+      : activeItem?.price && activeItem.price > 0
+      ? activeItem.price
+      : (incomingClientPrice > 0 ? incomingClientPrice : 0);
 
   // Expected price with profit (Preserving full 8 decimals for fractional unit prices < 1 to prevent rounding errors)
   const priceBeforeDiscount =
@@ -151,7 +158,9 @@ export const executePurchase = async ({
       : priceBeforeDiscount;
 
   // Unit selling price charged to user:
-  let unitSellingPrice = calculatedSellingPrice > 0 ? calculatedSellingPrice : baseCost;
+  let unitSellingPrice = calculatedSellingPrice > 0 
+    ? calculatedSellingPrice 
+    : (incomingClientPrice > 0 ? incomingClientPrice : baseCost);
 
   // Unit cost from provider
   let unitCost = baseCost;
@@ -733,8 +742,19 @@ export const getCustomOrdersAdmin = async (query = {}) => {
   stats.pending = (stats.pending || 0) + (stats.processing || 0);
   stats.rejected = (stats.failed || 0);
 
+  const formattedOrders = orders.map((o) => ({
+    ...o,
+    id: o._id,
+    user: o.userId,
+    price: o.userPrice ?? o.priceCharged ?? o.price ?? 0,
+    priceCharged: o.userPrice ?? o.priceCharged ?? o.price ?? 0,
+    originalPrice: o.costPrice ?? o.originalPrice ?? 0,
+    userPrice: o.userPrice ?? o.priceCharged ?? o.price ?? 0,
+    costPrice: o.costPrice ?? o.originalPrice ?? 0,
+  }));
+
   return {
-    orders,
+    orders: formattedOrders,
     pagination: {
       total,
       page,

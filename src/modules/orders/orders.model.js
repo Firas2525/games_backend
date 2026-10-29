@@ -103,8 +103,24 @@ const orderSchema = new mongoose.Schema(
   {
     timestamps: true,
     toJSON: {
+      virtuals: true,
       transform: (doc, ret) => {
         ret.id = ret._id;
+        ret.price = ret.userPrice ?? 0;
+        ret.priceCharged = ret.userPrice ?? 0;
+        ret.originalPrice = ret.costPrice ?? 0;
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      },
+    },
+    toObject: {
+      virtuals: true,
+      transform: (doc, ret) => {
+        ret.id = ret._id;
+        ret.price = ret.userPrice ?? 0;
+        ret.priceCharged = ret.userPrice ?? 0;
+        ret.originalPrice = ret.costPrice ?? 0;
         delete ret._id;
         delete ret.__v;
         return ret;
