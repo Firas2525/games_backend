@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import { ROLES, ALL_ROLES } from '../../constants/roles.js';
+import { calculateLevelInfo, LEVELS } from '../../constants/levels.js';
 
 const userSchema = new mongoose.Schema(
   {
@@ -83,6 +84,11 @@ const userSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    manualLevel: {
+      type: String,
+      enum: ['auto', 'bronze', 'silver', 'gold', 'diamond', 'vip'],
+      default: 'auto',
+    },
   },
   {
     timestamps: true,
@@ -90,6 +96,8 @@ const userSchema = new mongoose.Schema(
       transform: (doc, ret) => {
         ret.id = ret._id;
         ret.userCode = ret.userCode || (ret._id ? ret._id.toString().slice(-6) : '');
+        const levelData = calculateLevelInfo(ret.totalSpent || 0, ret.manualLevel || 'auto');
+        Object.assign(ret, levelData);
         delete ret._id;
         delete ret.__v;
         delete ret.password;

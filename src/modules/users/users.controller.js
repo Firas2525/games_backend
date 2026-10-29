@@ -63,4 +63,10 @@ export const changePassword = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, user, 'User password updated successfully');
 });
 
+export const updateLevel = asyncHandler(async (req, res) => {
+  const { manualLevel } = req.body;
+  const user = await usersService.updateUserLevel(req.params.id, manualLevel);
+  return ApiResponse.success(res, user, 'User level updated successfully');
+});
+
 

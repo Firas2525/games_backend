@@ -77,6 +77,17 @@ export const toggleUserStatus = async (id) => {
   return user;
 };
 
+export const updateUserLevel = async (id, manualLevel) => {
+  const allowed = ['auto', 'bronze', 'silver', 'gold', 'diamond', 'vip'];
+  if (!allowed.includes(manualLevel)) {
+    throw new ApiError('Invalid level value. Allowed: auto, bronze, silver, gold, diamond, vip', HTTP_STATUS.BAD_REQUEST);
+  }
+  const user = await getUserById(id);
+  user.manualLevel = manualLevel;
+  await user.save();
+  return user;
+};
+
 export const depositBalance = async ({ userId, amount, note = '', adminId }) => {
   const parsedAmount = Number(amount);
   if (!parsedAmount || parsedAmount <= 0) {

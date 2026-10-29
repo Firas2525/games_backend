@@ -10,6 +10,7 @@ import {
   getMyFinancialSummary,
   getAllTransactionsHandler,
   changePassword,
+  updateLevel,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -30,6 +31,7 @@ router.get('/', getUsers);
 router.get('/:id', getUser);
 router.patch('/:id/toggle-status', toggleStatus);
 router.patch('/:id/password', changePassword);
+router.patch('/:id/level', updateLevel);
 
 // Balance management routes
 router.post('/:id/balance/deposit', validate(balanceOperationSchema), deposit);
