@@ -189,41 +189,50 @@ export const fetchAuto1Card = async () => {
   }
 };
 
-// 3. Sync from all providers into MongoDB (preserving Admin Manual Overrides)
+// 2.2 Deactivate Syria Card & Auto 1 Card products completely
+export const deactivateSyriaCardProducts = async () => {
+  try {
+    const res = await Product.updateMany(
+      { source: { $in: ['syria_card', 'auto1card'] } },
+      { $set: { isVisible: false, isAvailable: false } }
+    );
+    if (res.modifiedCount > 0) {
+      console.log(`✅ [Products] Deactivated & hidden ${res.modifiedCount} Syria Card products.`);
+    }
+  } catch (err) {
+    console.error('Error deactivating Syria Card products:', err.message);
+  }
+};
+
+// 3. Sync from approved providers (Roya USD, Roya SYP, Brand 1 Card) into MongoDB
 export const syncAllProducts = async () => {
-  // First, migrate any legacy 'sw_games' source name to 'roya_usd'
+  // First, migrate any legacy 'sw_games' source name to 'roya_usd' and deactivate syria_card
   try {
     await Product.updateMany(
       { source: 'sw_games' },
       { $set: { source: 'roya_usd', sourceName: 'رؤيا دولار' } }
     );
-    await Product.updateMany(
-      { source: 'auto1card' },
-      { $set: { source: 'syria_card', sourceName: 'سيريا كارد' } }
-    );
-    await Product.updateMany(
-      { isVisible: false },
-      { $set: { isVisible: true } }
-    );
+    // Explicitly deactivate Syria Card / Auto 1 Card products
+    await deactivateSyriaCardProducts();
   } catch (e) {
     console.warn('Legacy source migration note:', e.message);
   }
 
-  const [swUsdList, swSypList, auto1List, brand1List] = await Promise.all([
+  // Only fetch from Roya USD, Roya SYP, and Brand 1 Card (Syria Card is disabled)
+  const [swUsdList, swSypList, brand1List] = await Promise.all([
     fetchSwGamesUsd(),
     fetchSwGamesSyp(),
-    fetchAuto1Card(),
     fetchBrand1Card(),
   ]);
 
-  const allNormalized = [...swUsdList, ...swSypList, ...auto1List, ...brand1List];
+  const allNormalized = [...swUsdList, ...swSypList, ...brand1List];
 
   if (allNormalized.length === 0) {
     return {
       totalSynced: 0,
       royaUsdCount: 0,
       royaSypCount: 0,
-      syriaCardCount: 0,
+      brand1CardCount: 0,
     };
   }
 
@@ -336,6 +345,8 @@ export const reclassifyAllProducts = async () => {
 export const autoSyncOnStartup = async () => {
   try {
     console.log('🔄 [AutoSync] Starting catalog synchronization and categorization...');
+    // Immediate deactivation of Syria Card products
+    await deactivateSyriaCardProducts().catch(() => {});
     // Seed legacy admin overrides if present
     await seedLegacyOverrides().catch(() => {});
     const result = await syncAllProducts();
@@ -492,7 +503,7 @@ export const getCatalogStats = async () => {
   const sources = {
     roya_usd: 0,
     roya_syp: 0,
-    syria_card: 0,
+    brand1card: 0,
     custom: 0,
   };
   for (const item of sourceAggregation) {
@@ -501,10 +512,10 @@ export const getCatalogStats = async () => {
         sources.roya_usd = (sources.roya_usd || 0) + item.count;
       } else if (item._id === 'roya_syp') {
         sources.roya_syp = (sources.roya_syp || 0) + item.count;
+      } else if (item._id === 'brand1card') {
+        sources.brand1card = (sources.brand1card || 0) + item.count;
       } else if (item._id === 'custom') {
         sources.custom = (sources.custom || 0) + item.count;
-      } else {
-        sources.syria_card = (sources.syria_card || 0) + item.count;
       }
     }
   }
@@ -623,51 +634,63 @@ export const ensureDefaultCategories = async () => {
 
 // Helper: Build query filter matching user currency (Lira vs Dollar separation)
 export const buildCurrencyProductFilter = (currencyStr) => {
-  if (!currencyStr) return null;
+  const syriaCardExclude = { source: { $nin: ['syria_card', 'auto1card'] } };
+  if (!currencyStr) return syriaCardExclude;
+
   const c = String(currencyStr).trim().toUpperCase();
   if (c === 'SYP' || c === 'ل.س' || c === 'ليرة' || c === 'SYRIAN POUND') {
-    // SYP USER: Strict isolation for providers, but include custom provider products if SYP or BOTH/ALL
+    // SYP USER: Strict isolation for providers (Roya SYP + Custom SYP only, Syria Card & Dollar excluded)
     return {
-      $or: [
+      $and: [
+        syriaCardExclude,
         {
-          $and: [
-            { source: { $nin: ['roya_usd', 'sw_games'] } },
-            { currency: { $nin: ['$', 'USD', 'usd'] } },
+          $or: [
             {
-              $or: [
-                { source: 'roya_syp' },
-                { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL'] } },
-                { sourceName: { $regex: 'ليرة', $options: 'i' } },
+              $and: [
+                { source: { $nin: ['roya_usd', 'sw_games', 'brand1card'] } },
+                { currency: { $nin: ['$', 'USD', 'usd'] } },
+                {
+                  $or: [
+                    { source: 'roya_syp' },
+                    { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL'] } },
+                    { sourceName: { $regex: 'ليرة', $options: 'i' } },
+                  ],
+                },
               ],
             },
+            {
+              source: 'custom',
+              currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] },
+            },
           ],
-        },
-        {
-          source: 'custom',
-          currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] },
         },
       ],
     };
   }
   if (c === 'USD' || c === '$' || c === 'دولار') {
-    // USD USER: Strict isolation for providers, but include custom provider products if USD or BOTH/ALL
+    // USD USER: Strict isolation for providers (Roya USD + Brand 1 Card + Custom USD, Syria Card excluded)
     return {
-      $or: [
+      $and: [
+        syriaCardExclude,
         {
-          $and: [
-            { source: { $ne: 'roya_syp' } },
-            { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
-            { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+          $or: [
+            {
+              $and: [
+                { source: { $nin: ['roya_syp', 'syria_card', 'auto1card'] } },
+                { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
+                { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+              ],
+            },
+            {
+              source: 'custom',
+              currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] },
+            },
           ],
-        },
-        {
-          source: 'custom',
-          currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] },
         },
       ],
     };
   }
-  return null;
+  return syriaCardExclude;
 };
 
 // 6.0 Get all categories with product counts (filtered by user currency)
@@ -676,7 +699,11 @@ export const getAllCategories = async (userCurrency = null) => {
   const categories = await Category.find({ isVisible: true }).sort({ sortOrder: 1, createdAt: 1 });
 
   const currencyFilter = buildCurrencyProductFilter(userCurrency);
-  const matchFilter = { isAvailable: { $ne: false }, isVisible: { $ne: false } };
+  const matchFilter = {
+    isAvailable: { $ne: false },
+    isVisible: { $ne: false },
+    source: { $nin: ['syria_card', 'auto1card'] },
+  };
   if (currencyFilter) {
     matchFilter.$and = [currencyFilter];
   }
@@ -920,9 +947,16 @@ export const getSubCategories = async (mainCategory, userCurrency = null) => {
 
   // Also include distinct categories from products under this mainCategory if not already in subCategories
   const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
-  const productQuery = { isVisible: true };
+  const productQuery = {
+    isVisible: true,
+    isAvailable: { $ne: false },
+    source: { $nin: ['syria_card', 'auto1card'] },
+  };
   if (mainCategory && mainCategory !== 'all') {
     productQuery.mainCategory = mainCategory;
+  }
+  if (currencyFilter) {
+    productQuery.$and = [currencyFilter];
   }
   const distinctProductCats = await Product.aggregate([
     { $match: productQuery },
@@ -1088,6 +1122,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   const andClauses = [
     { isAvailable: { $ne: false } },
     { isVisible: { $ne: false } },
+    { source: { $nin: ['syria_card', 'auto1card'] } },
   ];
 
   const currencyFilter = buildCurrencyProductFilter(userCurrency || query.currency);
