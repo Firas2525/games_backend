@@ -26,6 +26,17 @@ const bannerSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    placement: {
+      type: String,
+      enum: ['home', 'category', 'all'],
+      default: 'home',
+      index: true,
+    },
+    categoryKey: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   {
     timestamps: true,

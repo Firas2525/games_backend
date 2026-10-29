@@ -29,7 +29,33 @@ const DEFAULT_BANNERS = [
 
 export const getBanners = async (req, res, next) => {
   try {
-    const banners = await Banner.find({ isActive: true }).sort({ order: 1, createdAt: -1 });
+    const { placement, category } = req.query;
+    const filter = { isActive: true };
+
+    if (placement === 'category') {
+      filter.$or = [{ placement: 'category' }, { placement: 'all' }];
+      if (category) {
+        filter.$and = [
+          {
+            $or: [
+              { categoryKey: category },
+              { categoryKey: '' },
+              { categoryKey: { $exists: false } },
+            ],
+          },
+        ];
+      }
+    } else if (placement === 'home') {
+      filter.$or = [
+        { placement: 'home' },
+        { placement: 'all' },
+        { placement: { $exists: false } },
+      ];
+    } else if (placement) {
+      filter.placement = placement;
+    }
+
+    const banners = await Banner.find(filter).sort({ order: 1, createdAt: -1 });
     return ApiResponse.success(res, banners, 'تم جلب الإعلانات بنجاح');
   } catch (error) {
     next(error);
@@ -38,7 +64,17 @@ export const getBanners = async (req, res, next) => {
 
 export const getAllBannersAdmin = async (req, res, next) => {
   try {
-    const banners = await Banner.find().sort({ order: 1, createdAt: -1 });
+    const { placement } = req.query;
+    const filter = {};
+    if (placement === 'category') {
+      filter.placement = 'category';
+    } else if (placement === 'home') {
+      filter.$or = [{ placement: 'home' }, { placement: { $exists: false } }];
+    } else if (placement) {
+      filter.placement = placement;
+    }
+
+    const banners = await Banner.find(filter).sort({ order: 1, createdAt: -1 });
     return ApiResponse.success(res, banners, 'تم جلب جميع الإعلانات');
   } catch (error) {
     next(error);
@@ -47,7 +83,7 @@ export const getAllBannersAdmin = async (req, res, next) => {
 
 export const createBanner = async (req, res, next) => {
   try {
-    const { imageUrl, title, link, order, isActive } = req.body;
+    const { imageUrl, title, link, order, isActive, placement, categoryKey } = req.body;
 
     if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.trim()) {
       return ApiResponse.error(res, 'رابط الصورة مطلوب', 400);
@@ -59,6 +95,8 @@ export const createBanner = async (req, res, next) => {
       link: link?.trim() || '',
       order: Number(order) || 0,
       isActive: isActive !== undefined ? isActive : true,
+      placement: placement || 'home',
+      categoryKey: categoryKey?.trim() || '',
     });
 
     return ApiResponse.success(res, banner, 'تمت إضافة الإعلان بنجاح', 201);
