@@ -95,3 +95,4 @@ export const calculateLevelInfo = (totalSpent = 0, manualLevel = 'auto') => {
     totalSpent: Number(spent.toFixed(2)),
   };
 };
+
