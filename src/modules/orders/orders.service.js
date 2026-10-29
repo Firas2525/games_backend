@@ -158,21 +158,21 @@ export const executePurchase = async ({
       : priceBeforeDiscount;
 
   // Unit selling price charged to user:
-  let unitSellingPrice = calculatedSellingPrice > 0 
+  const resolvedUnitSellingPrice = calculatedSellingPrice > 0 
     ? calculatedSellingPrice 
     : (incomingClientPrice > 0 ? incomingClientPrice : baseCost);
 
   // Unit cost from provider
   let unitCost = baseCost;
-  if (unitCost <= 0 && unitSellingPrice > 0) {
+  if (unitCost <= 0 && resolvedUnitSellingPrice > 0) {
     unitCost =
       profitPercentage > 0
-        ? (unitSellingPrice >= 1 ? Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(4)) : Number((unitSellingPrice / (1 + profitPercentage / 100)).toFixed(8)))
-        : unitSellingPrice;
+        ? (resolvedUnitSellingPrice >= 1 ? Number((resolvedUnitSellingPrice / (1 + profitPercentage / 100)).toFixed(4)) : Number((resolvedUnitSellingPrice / (1 + profitPercentage / 100)).toFixed(8)))
+        : resolvedUnitSellingPrice;
   }
 
   const validQuantity = Math.max(1, Number(quantity) || 1);
-  const totalUserPrice = Number((unitSellingPrice * validQuantity).toFixed(4));
+  const totalUserPrice = Number((resolvedUnitSellingPrice * validQuantity).toFixed(4));
   const totalCost = Number((unitCost * validQuantity).toFixed(4));
   const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));
 
