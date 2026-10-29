@@ -10,7 +10,7 @@ import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
 
-export const generateShortOrderId = async () => {
+const generateShortOrderId = async () => {
   let isUnique = false;
   let code = '';
   let attempts = 0;
