@@ -141,10 +141,10 @@ export const executePurchase = async ({
     activeItem?.originalPrice && activeItem.originalPrice > 0
       ? activeItem.originalPrice
       : activeItem?.sellingPrice && activeItem.sellingPrice > 0
-      ? activeItem.sellingPrice
-      : activeItem?.price && activeItem.price > 0
-      ? activeItem.price
-      : (incomingClientPrice > 0 ? incomingClientPrice : 0);
+        ? activeItem.sellingPrice
+        : activeItem?.price && activeItem.price > 0
+          ? activeItem.price
+          : (incomingClientPrice > 0 ? incomingClientPrice : 0);
 
   // Expected price with profit (Preserving full 8 decimals for fractional unit prices < 1 to prevent rounding errors)
   const priceBeforeDiscount =
@@ -158,8 +158,8 @@ export const executePurchase = async ({
       : priceBeforeDiscount;
 
   // Unit selling price charged to user:
-  const resolvedUnitSellingPrice = calculatedSellingPrice > 0 
-    ? calculatedSellingPrice 
+  const resolvedUnitSellingPrice = calculatedSellingPrice > 0
+    ? calculatedSellingPrice
     : (incomingClientPrice > 0 ? incomingClientPrice : baseCost);
 
   // Unit cost from provider
@@ -212,12 +212,12 @@ export const executePurchase = async ({
     status: isCustomProvider ? 'pending' : 'processing',
     providerPayload: isCustomProvider
       ? {
-          isManual: true,
-          provider: 'مزودي الخاص',
-          targetId: targetId || '',
-          quantity: validQuantity,
-          extraFields,
-        }
+        isManual: true,
+        provider: 'مزودي الخاص',
+        targetId: targetId || '',
+        quantity: validQuantity,
+        extraFields,
+      }
       : basePayload,
     providerResponse: isCustomProvider
       ? { message: 'طلب قيد المعالجة اليدوية من قبل إدارة المتجر', assignedAt: new Date() }
