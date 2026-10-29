@@ -22,6 +22,11 @@ const settingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    exchangeRateUsdToSyp: {
+      type: Number,
+      default: 15000,
+      min: 1,
+    },
   },
   {
     timestamps: true,

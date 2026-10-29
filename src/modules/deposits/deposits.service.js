@@ -3,6 +3,7 @@ import { DepositMethod } from './depositMethods.model.js';
 import { Deposit } from './deposits.model.js';
 import { User } from '../users/users.model.js';
 import { Transaction } from '../users/transactions.model.js';
+import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
@@ -235,10 +236,39 @@ export const createDepositRequest = async ({
     throw new ApiError('رقم العملية هذا تم إرساله مسبقاً، يرجى التحقق من الرقم المدخل', HTTP_STATUS.CONFLICT);
   }
 
+  // Get system daily exchange rate
+  let exchangeRate = 15000;
+  try {
+    const settings = await getSettings();
+    if (settings && settings.exchangeRateUsdToSyp) {
+      exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+    }
+  } catch (_) {}
+
   // Calculate fees & net amount
   const feePercent = Number(method.fee || 0);
   const feeAmount = Number(((cleanAmount * feePercent) / 100).toFixed(4));
-  const netAmount = Number((cleanAmount - feeAmount).toFixed(4));
+  const rawNetAmount = Number((cleanAmount - feeAmount).toFixed(4));
+
+  const userCurrency = (user.currency || 'USD').toUpperCase();
+  const methodCurrency = (method.currency || 'USD').toUpperCase();
+
+  let netAmount = rawNetAmount;
+  let creditCurrency = userCurrency;
+  let appliedRate = 1;
+
+  if (userCurrency === 'USD' && methodCurrency === 'SYP') {
+    // USD User depositing in SYP:
+    // Convert SYP net amount to USD equivalent based on exchange rate
+    appliedRate = exchangeRate;
+    netAmount = Number((rawNetAmount / exchangeRate).toFixed(2));
+    creditCurrency = 'USD';
+  } else if (userCurrency === 'SYP' && methodCurrency === 'USD') {
+    // SYP User depositing in USD:
+    appliedRate = exchangeRate;
+    netAmount = Math.round(rawNetAmount * exchangeRate);
+    creditCurrency = 'SYP';
+  }
 
   // Generate friendly unique 6-digit deposit ID
   let isUnique = false;
@@ -271,8 +301,8 @@ export const createDepositRequest = async ({
     feePercent,
     feeAmount,
     sourceCurrency: method.currency,
-    creditCurrency: user.currency || method.currency,
-    exchangeRate: method.exchangeRate || 1,
+    creditCurrency,
+    exchangeRate: appliedRate,
     operationNumber: cleanOperation,
     note: String(note || '').trim(),
     receiptImage: String(receiptImage || '').trim(),
@@ -280,14 +310,18 @@ export const createDepositRequest = async ({
   });
 
   // Create pending transaction audit log
+  const txNote = (userCurrency === 'USD' && methodCurrency === 'SYP')
+    ? `طلب إيداع قيد المراجعة عبر ${method.title} (${cleanAmount} ل.س = معادل ${netAmount} $ بسعر صرف 1$ = ${appliedRate} ل.س) - رقم العملية: ${cleanOperation}`
+    : `طلب إيداع قيد المراجعة عبر ${method.title} (${cleanAmount} ${method.currency}) - رقم العملية: ${cleanOperation}`;
+
   const transaction = await Transaction.create({
     userId: user._id,
     type: 'deposit_request',
-    currency: user.currency || method.currency || 'USD',
+    currency: creditCurrency,
     amount: netAmount,
     previousBalance: user.balance || 0,
     newBalance: user.balance || 0,
-    note: `طلب إيداع قيد المراجعة عبر ${method.title} (${cleanAmount} ${method.currency}) - رقم العملية: ${cleanOperation}`,
+    note: txNote,
   });
 
   deposit.transactionId = transaction._id;
@@ -412,6 +446,10 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
   await deposit.save();
 
   // Record audit transaction
+  const acceptNote = (deposit.sourceCurrency === 'SYP' && deposit.creditCurrency === 'USD')
+    ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ل.س = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
+    : `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`;
+
   await Transaction.create({
     userId: user._id,
     adminId: mongoose.isValidObjectId(adminId) ? adminId : null,
@@ -420,7 +458,7 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
     amount: creditAmount,
     previousBalance: prevBal,
     newBalance: newBal,
-    note: `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`,
+    note: acceptNote,
   });
 
   return {

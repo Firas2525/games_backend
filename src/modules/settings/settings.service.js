@@ -27,6 +27,9 @@ export const updateSettings = async (data = {}) => {
   if (data.isTickerActive !== undefined) {
     settings.isTickerActive = Boolean(data.isTickerActive);
   }
+  if (data.exchangeRateUsdToSyp !== undefined) {
+    settings.exchangeRateUsdToSyp = Math.max(1, Number(data.exchangeRateUsdToSyp) || 15000);
+  }
   await settings.save();
   return settings;
 };
