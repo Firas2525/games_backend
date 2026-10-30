@@ -34,6 +34,21 @@ app.get('/health', (req, res) => {
   return ApiResponse.success(res, { status: 'healthy', timestamp: new Date() }, 'API is up and running');
 });
 
+// Public Homepage & Privacy Policy for Google OAuth Branding
+app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.status(200).send(
+    '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>Games Store</title></head><body style="font-family:sans-serif;background:#0f172a;color:#fff;padding:40px;text-align:center;"><h1>Games Store - مركز شحن الألعاب والخدمات الرقمية</h1><p><a href="/privacy" style="color:#38bdf8;">سياسة الخصوصية (Privacy Policy)</a></p></body></html>'
+  );
+});
+
+app.get('/privacy', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.status(200).send(
+    '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>Privacy Policy - Games Store</title></head><body style="font-family:sans-serif;background:#0f172a;color:#fff;padding:40px;max-width:720px;margin:auto;line-height:1.7;"><h1>سياسة الخصوصية - Privacy Policy</h1><p>يستخدم تطبيق Games Store بيانات تسجيل الدخول عبر Google (الاسم والبريد الإلكتروني فقط) لإنشاء حساب المستخدم وتأمين عمليات الشحن الرقمي داخل التطبيق، ولا تتم مشاركة هذه البيانات مع أي طرف ثالث.</p></body></html>'
+  );
+});
+
 // Outgoing IP diagnostic endpoint
 app.get('/server-ip', async (req, res) => {
   try {

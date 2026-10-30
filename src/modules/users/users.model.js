@@ -89,6 +89,25 @@ const userSchema = new mongoose.Schema(
       enum: ['auto', 'bronze', 'silver', 'gold', 'diamond', 'vip'],
       default: 'auto',
     },
+    googleId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    twoFactorEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    twoFactorSecret: {
+      type: String,
+      default: '',
+      select: false,
+    },
+    twoFactorTempSecret: {
+      type: String,
+      default: '',
+      select: false,
+    },
   },
   {
     timestamps: true,
@@ -96,11 +115,14 @@ const userSchema = new mongoose.Schema(
       transform: (doc, ret) => {
         ret.id = ret._id;
         ret.userCode = ret.userCode || (ret._id ? ret._id.toString().slice(-6) : '');
+        ret.twoFactorEnabled = Boolean(ret.twoFactorEnabled);
         const levelData = calculateLevelInfo(ret.totalSpent || 0, ret.manualLevel || 'auto');
         Object.assign(ret, levelData);
         delete ret._id;
         delete ret.__v;
         delete ret.password;
+        delete ret.twoFactorSecret;
+        delete ret.twoFactorTempSecret;
         return ret;
       },
     },
