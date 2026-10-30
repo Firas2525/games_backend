@@ -8,7 +8,7 @@ export const purchase = asyncHandler(async (req, res) => {
     ...req.body,
     userId,
   });
-  return ApiResponse.success(res, result, 'تم تنفيذ عملية الشراء بنجاح');
+  return ApiResponse.success(res, result, 'تم استقبال الطلب بنجاح');
 });
 
 export const getMyOrders = asyncHandler(async (req, res) => {

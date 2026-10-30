@@ -93,6 +93,116 @@ export function extractProviderOrderId(result) {
 }
 
 /**
+ * Extracts all raw error text from a provider response (including Brand1Card replay_api arrays & Roya messages)
+ */
+export function extractRawProviderErrorText(result) {
+  if (!result || typeof result !== 'object') return '';
+
+  const parts = [];
+  const pushStr = (v) => {
+    if (typeof v === 'string' && v.trim()) {
+      parts.push(v.trim());
+    }
+  };
+
+  pushStr(result.msg);
+  pushStr(result.message);
+  pushStr(result.detail);
+  pushStr(result.error_message);
+  pushStr(result.description);
+  if (typeof result.error === 'string') pushStr(result.error);
+
+  if (result.data && typeof result.data === 'object') {
+    pushStr(result.data.msg);
+    pushStr(result.data.message);
+    pushStr(result.data.detail);
+    pushStr(result.data.error_message);
+
+    // Brand One Card replay_api: e.g. [{ replay: ["Invalid Player ID"] }]
+    const replayApi = result.data.replay_api || result.replay_api;
+    if (Array.isArray(replayApi)) {
+      for (const item of replayApi) {
+        if (typeof item === 'string') {
+          pushStr(item);
+        } else if (item && typeof item === 'object') {
+          if (Array.isArray(item.replay)) {
+            item.replay.forEach(pushStr);
+          } else {
+            pushStr(item.replay);
+            pushStr(item.message);
+            pushStr(item.msg);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(parts)).join(' | ');
+}
+
+/**
+ * Maps any provider error response to a standardized, safe user-facing Arabic message:
+ * 1. Insufficient provider balance -> 'حدث خطأ تواصل مع الدعم و حاول لاحقا'
+ * 2. Invalid input / Player ID / User not found / Quantity out of range -> 'حدث خطأ تحقق من مدخلاتك و حاول مجددا'
+ * 3. Any other error -> 'حدث خطأ حاول لاحقا'
+ */
+export function mapProviderUserErrorMessage(rawErrorText = '', result = null) {
+  const combined = `${rawErrorText} ${extractRawProviderErrorText(result)}`.toLowerCase();
+  const code = Number(result?.code);
+
+  // 1. Insufficient Provider Balance
+  const balanceKeywords = [
+    'insufficient balance',
+    'insufficient',
+    'not enough balance',
+    'الرصيد غير كاف',
+    'رصيدك غير كاف',
+    'رصيد غير كاف',
+    'عدم كفاية الرصيد',
+    'balance',
+  ];
+  if (code === 100 || balanceKeywords.some((kw) => combined.includes(kw))) {
+    return 'حدث خطأ تواصل مع الدعم و حاول لاحقا';
+  }
+
+  // 2. Invalid Input / Player ID / User Not Found / Quantity Range
+  const inputKeywords = [
+    'invalid player',
+    'player id',
+    'playerid',
+    'player_id',
+    'invalid id',
+    'wrong id',
+    'user not found',
+    'player not found',
+    'account not found',
+    'not found',
+    'invalid',
+    'مستخدم غير موجود',
+    'اللاعب غير موجود',
+    'الحساب غير موجود',
+    'غير موجود',
+    'الكمية يجب أن تكون',
+    'الكمية',
+    'quantity',
+    'أقل كمية',
+    'أقصى كمية',
+    'غير صحيح',
+    'غير صالح',
+    'خاطئ',
+    'مدخلات',
+    'آيدي',
+    'ايدي',
+  ];
+  if (inputKeywords.some((kw) => combined.includes(kw))) {
+    return 'حدث خطأ تحقق من مدخلاتك و حاول مجددا';
+  }
+
+  // 3. Any Other Error
+  return 'حدث خطأ حاول لاحقا';
+}
+
+/**
  * Checks if a response indicates a clear failure (mirroring goldsm_provider_clear_failure)
  */
 export function isProviderClearFailure(result, statusCode) {
@@ -109,14 +219,7 @@ export function isProviderClearFailure(result, statusCode) {
     return true;
   }
 
-  const msg = String(
-    result.msg ||
-      result.message ||
-      result.error_message ||
-      result.description ||
-      result.data?.message ||
-      ''
-  ).toLowerCase();
+  const msg = extractRawProviderErrorText(result).toLowerCase();
 
   const failureKeywords = [
     'insufficient',
@@ -136,6 +239,7 @@ export function isProviderClearFailure(result, statusCode) {
     'unauthorized',
     'token',
     'balance',
+    'الكمية يجب أن تكون',
   ];
 
   if (failureKeywords.some((kw) => msg.includes(kw))) {
@@ -308,30 +412,34 @@ export const dispatchProviderOrder = async ({
     const extractedOrderId = extractProviderOrderId(responseData);
     const clearFailure = isProviderClearFailure(responseData, statusCode);
 
+    let rawErrorText = '';
+
     if (source === 'brand1card') {
       // Brand One Card response protocol:
-      // { status: 'OK', data: { order_id: 123, status: 'accept' | 'wait' | 'reject' } }
+      // { status: 'OK', data: { order_id: 123, status: 'accept' | 'wait' | 'reject', replay_api: [...] } }
       if (responseData?.status === 'OK' && responseData?.data) {
         const itemStatus = String(responseData.data.status || '').toLowerCase();
-        if (itemStatus === 'accept') {
+        if (itemStatus === 'accept' || itemStatus === 'done' || itemStatus === 'completed') {
           isSuccess = true;
           finalStatus = 'completed';
-        } else if (itemStatus === 'wait') {
+        } else if (itemStatus === 'wait' || itemStatus === 'pending' || itemStatus === 'processing') {
           isSuccess = true;
           finalStatus = 'processing';
         } else {
           isSuccess = false;
           finalStatus = 'failed';
-          errorMessage = responseData.data.message || responseData.msg || 'تم رفض الطلب من براند كارد';
+          rawErrorText =
+            extractRawProviderErrorText(responseData) ||
+            'تم رفض الطلب من براند كارد';
+          errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
         }
       } else {
         isSuccess = false;
         finalStatus = 'failed';
-        errorMessage =
-          responseData?.msg ||
-          responseData?.message ||
-          responseData?.error ||
+        rawErrorText =
+          extractRawProviderErrorText(responseData) ||
           'فشل إرسال الطلب إلى براند كارد';
+        errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
       }
     } else {
       // SW Games (Roya) & Auto1Card
@@ -346,19 +454,17 @@ export const dispatchProviderOrder = async ({
       } else {
         isSuccess = false;
         finalStatus = 'failed';
-        errorMessage =
-          responseData?.msg ||
-          responseData?.message ||
-          responseData?.error ||
-          responseData?.data?.message ||
+        rawErrorText =
+          extractRawProviderErrorText(responseData) ||
           (statusCode >= 400 ? `خطأ مزود الخدمة (${statusCode})` : 'رفض المزود الطلب');
+        errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
       }
     }
   } catch (err) {
     statusCode = 504;
     isSuccess = false;
     finalStatus = 'failed';
-    errorMessage = `تعذر الاتصال بالمزود: ${err.message}`;
+    errorMessage = 'حدث خطأ حاول لاحقا';
     responseData = { error: err.message };
   }
 
@@ -391,7 +497,7 @@ export const dispatchProviderOrder = async ({
     responseBody: responseData,
     durationMs,
     isSuccess,
-    errorMessage,
+    errorMessage: isSuccess ? '' : (extractRawProviderErrorText(responseData) || errorMessage),
   });
 
   return {
@@ -400,7 +506,8 @@ export const dispatchProviderOrder = async ({
     providerPayload: { targetUrl, params, headers: sanitizedHeaders },
     providerResponse: responseData,
     providerOrderId: String(providerOrderId),
-    errorMessage: isSuccess ? '' : errorMessage,
+    errorMessage: isSuccess ? '' : (errorMessage || 'حدث خطأ حاول لاحقا'),
+    userMessage: isSuccess ? 'تم استقبال الطلب بنجاح' : (errorMessage || 'حدث خطأ حاول لاحقا'),
   };
 };
 

@@ -8,7 +8,12 @@ import { SubCategory } from '../products/subcategories.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-import { dispatchProviderOrder, checkExternalOrderStatus, checkSwGamesOrdersBatch } from './providerDispatch.service.js';
+import {
+  dispatchProviderOrder,
+  checkExternalOrderStatus,
+  checkSwGamesOrdersBatch,
+  mapProviderUserErrorMessage,
+} from './providerDispatch.service.js';
 
 const generateShortOrderId = async () => {
   let isUnique = false;
@@ -243,12 +248,12 @@ export const executePurchase = async ({
         providerPayload: basePayload,
         providerResponse: { error: dispErr.message },
         providerOrderId: null,
-        errorMessage: dispErr.message,
+        errorMessage: mapProviderUserErrorMessage(dispErr.message),
       };
     }
   }
 
-  // 7. Handle Provider Failure with Immediate Refund & Exact Error Reporting
+  // 7. Handle Provider Failure with Immediate Refund & Sanitized User Error Reporting
   if (!dispatchResult.success) {
     // Revert user balance deduction immediately (Automatic Refund)
     user.balance = previousBalance;
@@ -280,11 +285,11 @@ export const executePurchase = async ({
       providerResponse: dispatchResult.providerResponse || null,
     });
 
-    const errorDetail = dispatchResult.errorMessage || 'رفض مزود الخدمة الطلب';
-    throw new ApiError(
-      `تعذر تنفيذ الشحن من المزود: ${errorDetail}. لم يتم خصم أي رصيد من حسابك وتمت إعادة الرصيد لمحفظتك.`,
-      HTTP_STATUS.BAD_REQUEST
-    );
+    const userFacingError =
+      dispatchResult.userMessage ||
+      dispatchResult.errorMessage ||
+      'حدث خطأ حاول لاحقا';
+    throw new ApiError(userFacingError, HTTP_STATUS.BAD_REQUEST);
   }
 
   // 8. Create Order Record with full execution details (Successful / Processing Order)
