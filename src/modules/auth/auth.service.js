@@ -37,19 +37,28 @@ const generateTwoFactorTempToken = (user) => {
 export const registerUser = async ({ name, email, phone, password, currency, role }) => {
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    throw new ApiError('Email is already registered', HTTP_STATUS.CONFLICT);
+    throw new ApiError('البريد الإلكتروني مسجل مسبقاً', HTTP_STATUS.CONFLICT);
   }
 
-  const normalizedCurrency = currency === 'SYP' ? 'SYP' : 'USD';
+  const trimmedPhone = phone ? String(phone).trim() : '';
+  if (!trimmedPhone || trimmedPhone.length < 6) {
+    throw new ApiError('يرجى إدخال رقم الهاتف بشكل صحيح', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const upperCurrency = String(currency || '').trim().toUpperCase();
+  if (!['USD', 'SYP'].includes(upperCurrency)) {
+    throw new ApiError('يرجى اختيار عملة الحساب (دولار أو ليرة سورية)', HTTP_STATUS.BAD_REQUEST);
+  }
+
   const resolvedName = (name && name.trim().length > 0) ? name.trim() : email.split('@')[0];
 
   const user = await User.create({
     name: resolvedName,
     email: email.trim().toLowerCase(),
-    phone: phone ? phone.trim() : '',
+    phone: trimmedPhone,
     password,
     plainPassword: password,
-    currency: normalizedCurrency,
+    currency: upperCurrency,
     role: role || 'user',
   });
 
@@ -132,7 +141,7 @@ export const verifyTwoFactorLogin = async ({ tempToken, code }) => {
   };
 };
 
-export const googleAuthLogin = async ({ idToken, accessToken, currency }) => {
+export const googleAuthLogin = async ({ idToken, accessToken, currency, phone }) => {
   let googlePayload = null;
 
   if (idToken) {
@@ -162,26 +171,57 @@ export const googleAuthLogin = async ({ idToken, accessToken, currency }) => {
   const name = googlePayload.name || email.split('@')[0];
   const avatar = googlePayload.picture || '';
 
+  const trimmedPhone = phone ? String(phone).trim() : '';
+  const upperCurrency = currency ? String(currency).trim().toUpperCase() : '';
+  const hasValidOnboardingData =
+    trimmedPhone.length >= 6 && ['USD', 'SYP'].includes(upperCurrency);
+
   let user = await User.findOne({ email }).select('+twoFactorSecret');
 
   if (!user) {
+    if (!hasValidOnboardingData) {
+      return {
+        requiresOnboarding: true,
+        email,
+        name,
+        avatar,
+      };
+    }
+
     const randomPassword = crypto.randomBytes(12).toString('hex');
-    const normalizedCurrency = currency === 'SYP' ? 'SYP' : 'USD';
     user = await User.create({
       name,
       email,
+      phone: trimmedPhone,
       googleId,
       avatar,
       password: randomPassword,
       plainPassword: randomPassword,
-      currency: normalizedCurrency,
+      currency: upperCurrency,
       role: 'user',
     });
   } else {
     if (!user.isActive) {
       throw new ApiError('هذا الحساب محظور من قبل الإدارة', HTTP_STATUS.FORBIDDEN);
     }
-    let changed = false;
+
+    const existingPhone = user.phone ? String(user.phone).trim() : '';
+    if (existingPhone.length < 6 && user.role !== 'admin') {
+      if (!hasValidOnboardingData) {
+        return {
+          requiresOnboarding: true,
+          email: user.email,
+          name: user.name || name,
+          avatar: user.avatar || avatar,
+        };
+      }
+      user.phone = trimmedPhone;
+      if ((user.balance || 0) === 0 && (user.totalSpent || 0) === 0) {
+        user.currency = upperCurrency;
+      }
+    }
+
+    let changed = existingPhone.length < 6 && hasValidOnboardingData;
     if (googleId && !user.googleId) {
       user.googleId = googleId;
       changed = true;
