@@ -13,7 +13,6 @@ export const registerSchema = z.object({
       required_error: 'يرجى اختيار عملة الحساب (USD أو SYP)',
       invalid_type_error: 'يرجى اختيار عملة الحساب (USD أو SYP)',
     }),
-    role: z.enum(['user', 'admin']).optional(),
   }),
 });
 

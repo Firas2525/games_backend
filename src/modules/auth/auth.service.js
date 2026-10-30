@@ -59,7 +59,7 @@ export const registerUser = async ({ name, email, phone, password, currency, rol
     password,
     plainPassword: password,
     currency: upperCurrency,
-    role: role || 'user',
+    role: 'user',
   });
 
   const token = generateToken(user);
@@ -70,19 +70,23 @@ export const registerUser = async ({ name, email, phone, password, currency, rol
   };
 };
 
-export const loginUser = async ({ email, password, otpCode }) => {
+export const loginUser = async ({ email, password, otpCode, isAdminPortal = false }) => {
   const user = await User.findOne({ email }).select('+password +twoFactorSecret');
   if (!user) {
-    throw new ApiError('Invalid email or password', HTTP_STATUS.UNAUTHORIZED);
+    throw new ApiError('البريد الإلكتروني أو كلمة المرور غير صحيحة', HTTP_STATUS.UNAUTHORIZED);
   }
 
   const isPasswordMatch = await user.comparePassword(password);
   if (!isPasswordMatch) {
-    throw new ApiError('Invalid email or password', HTTP_STATUS.UNAUTHORIZED);
+    throw new ApiError('البريد الإلكتروني أو كلمة المرور غير صحيحة', HTTP_STATUS.UNAUTHORIZED);
+  }
+
+  if (!isAdminPortal && user.role === 'admin') {
+    throw new ApiError('لا يمكن تسجيل الدخول بحساب الإدارة في تطبيق المستخدم', HTTP_STATUS.FORBIDDEN);
   }
 
   if (!user.isActive) {
-    throw new ApiError('This account has been deactivated', HTTP_STATUS.FORBIDDEN);
+    throw new ApiError('هذا الحساب معطل من قبل الإدارة', HTTP_STATUS.FORBIDDEN);
   }
 
   if (user.twoFactorEnabled && user.twoFactorSecret) {
@@ -201,6 +205,10 @@ export const googleAuthLogin = async ({ idToken, accessToken, currency, phone })
       role: 'user',
     });
   } else {
+    if (user.role === 'admin') {
+      throw new ApiError('لا يمكن تسجيل الدخول بحساب الإدارة في تطبيق المستخدم', HTTP_STATUS.FORBIDDEN);
+    }
+
     if (!user.isActive) {
       throw new ApiError('هذا الحساب محظور من قبل الإدارة', HTTP_STATUS.FORBIDDEN);
     }
@@ -327,9 +335,9 @@ export const disableTwoFactor = async (userId, code) => {
 };
 
 export const adminLogin = async ({ email, password }) => {
-  const result = await loginUser({ email, password });
-  if (result.user.role !== 'admin') {
-    throw new ApiError('Access denied: Administrator privileges required', HTTP_STATUS.FORBIDDEN);
+  const result = await loginUser({ email, password, isAdminPortal: true });
+  if (!result.user || result.user.role !== 'admin') {
+    throw new ApiError('غير مصرح: هذا الحساب لا يملك صلاحيات الإدارة', HTTP_STATUS.FORBIDDEN);
   }
   return result;
 };
