@@ -734,11 +734,25 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
     console.error('Batch check SW Games orders error:', err);
   }
 
-  // Fallback for any order not resolved by checkorders: use /order/{id}
+  // Fallback for any order not resolved by checkorders, OR completed without reply/card details: use /order/{id}
   for (const o of orders) {
     const key = o._id.toString();
-    if (!results.has(key)) {
-      const singleId = o.providerOrderId || o.providerPayload?.params?.order_uuid || o.orderId;
+    const existingRes = results.get(key);
+    const hasReplyDetails =
+      existingRes?.rawData &&
+      (existingRes.rawData.reply ||
+        existingRes.rawData.replay ||
+        existingRes.rawData.code ||
+        existingRes.rawData.pin ||
+        existingRes.rawData.serial ||
+        existingRes.rawData.cards);
+
+    if (!existingRes || (existingRes.status === 'completed' && !hasReplyDetails)) {
+      const singleId =
+        existingRes?.providerOrderNumber ||
+        o.providerOrderId ||
+        o.providerPayload?.params?.order_uuid ||
+        o.orderId;
       if (singleId) {
         try {
           const singleUrl = `https://sw-games.net/api/fastapi/order/${singleId}`;
@@ -750,7 +764,7 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
             const orderObj = singleData?.data?.order || singleData?.order;
             if (orderObj) {
               const raw = String(orderObj.status || '').toLowerCase();
-              let resolvedStatus = 'processing';
+              let resolvedStatus = existingRes?.status || 'processing';
               if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted'].includes(raw)) {
                 resolvedStatus = 'completed';
               } else if (['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused'].includes(raw)) {
@@ -759,7 +773,7 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
               results.set(key, {
                 status: resolvedStatus,
                 providerOrderNumber: orderObj.order_number || o.providerOrderId,
-                rawData: orderObj,
+                rawData: { ...(existingRes?.rawData || {}), ...orderObj },
               });
             }
           }
@@ -770,3 +784,122 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
 
   return results;
 };
+
+/**
+ * Extracts card details, PINs, voucher codes, or fulfillment replies ONLY for completed orders.
+ * Supports Brand1Card (replay_api, cards, code), Roya/SW Games (reply, code, pin, serial, cards),
+ * and Custom Provider (adminNote, responseData).
+ */
+export function extractOrderDeliveryDetails(order) {
+  if (!order || order.status !== 'completed') return '';
+  const resp = order.providerResponse;
+  if (!resp || typeof resp !== 'object') return '';
+
+  const lines = [];
+  const ignoredPhrases = new Set([
+    'ok',
+    'success',
+    'accept',
+    'completed',
+    'done',
+    'true',
+    '1',
+    'تم تسجيل الطلب للتنفيذ اليدوي في لوحة الإدارة',
+    'طلب قيد المعالجة اليدوية من قبل إدارة المتجر',
+  ]);
+
+  const addLine = (val, label = '') => {
+    if (val === null || val === undefined) return;
+    if (typeof val === 'string' || typeof val === 'number') {
+      const s = String(val).trim();
+      if (!s || ignoredPhrases.has(s.toLowerCase())) return;
+      lines.push(label ? `${label}: ${s}` : s);
+    }
+  };
+
+  // 1. Custom Provider (مزودي الخاص)
+  if (resp.adminNote) addLine(resp.adminNote);
+  if (resp.responseData) {
+    if (typeof resp.responseData === 'string') {
+      addLine(resp.responseData);
+    } else if (typeof resp.responseData === 'object') {
+      for (const [k, v] of Object.entries(resp.responseData)) {
+        addLine(v, k);
+      }
+    }
+  }
+
+  // 2. Brand One Card (replay_api inside root or data)
+  const replayArrays = [resp.replay_api, resp.data?.replay_api].filter(Array.isArray);
+  for (const arr of replayArrays) {
+    for (const item of arr) {
+      if (typeof item === 'string') {
+        addLine(item);
+      } else if (item && typeof item === 'object') {
+        if (Array.isArray(item.replay)) {
+          item.replay.forEach((r) => addLine(r));
+        } else {
+          addLine(item.replay);
+          addLine(item.code);
+          addLine(item.pin);
+          addLine(item.serial);
+          addLine(item.card);
+        }
+      }
+    }
+  }
+
+  // 3. Roya / SW Games & general card/voucher fields
+  const containers = [resp, resp.data, resp.data?.order, resp.order].filter(
+    (c) => c && typeof c === 'object'
+  );
+
+  for (const c of containers) {
+    addLine(c.reply);
+    if (typeof c.replay === 'string') addLine(c.replay);
+    addLine(c.code, 'الكود');
+    addLine(c.pin, 'PIN');
+    addLine(c.serial, 'الرقم التسلسلي');
+    addLine(c.voucher, 'القسيمة');
+    addLine(c.card_number || c.cardNumber, 'رقم البطاقة');
+    addLine(c.cvv || c.cvc, 'CVV');
+    addLine(c.expiry || c.exp_date || c.expiration, 'تاريخ الانتهاء');
+    addLine(c.note);
+
+    if (Array.isArray(c.cards)) {
+      for (const card of c.cards) {
+        if (typeof card === 'string') {
+          addLine(card);
+        } else if (card && typeof card === 'object') {
+          for (const [k, v] of Object.entries(card)) {
+            addLine(v, k);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(new Set(lines)).join('\n');
+}
+
+/**
+ * Formats order execution duration in clean Arabic text
+ */
+export function formatDurationArabic(seconds) {
+  if (seconds === null || seconds === undefined || isNaN(seconds) || seconds < 0) {
+    return '';
+  }
+  const sec = Math.round(seconds);
+  if (sec <= 2) return 'فوري (أقل من ثانيتين)';
+  if (sec < 60) return `${sec} ثانية`;
+  const mins = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (mins < 60) {
+    const minStr = mins === 1 ? 'دقيقة' : mins === 2 ? 'دقيقتين' : `${mins} دقائق`;
+    return remSec > 0 ? `${minStr} و ${remSec} ثانية` : minStr;
+  }
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  const hrStr = hours === 1 ? 'ساعة' : hours === 2 ? 'ساعتين' : `${hours} ساعات`;
+  return remMins > 0 ? `${hrStr} و ${remMins} دقيقة` : hrStr;
+}

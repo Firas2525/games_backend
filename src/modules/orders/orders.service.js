@@ -13,7 +13,47 @@ import {
   checkExternalOrderStatus,
   checkSwGamesOrdersBatch,
   mapProviderUserErrorMessage,
+  extractOrderDeliveryDetails,
+  formatDurationArabic,
 } from './providerDispatch.service.js';
+
+export const enrichOrderWithInvoiceMeta = (rawOrder) => {
+  if (!rawOrder) return rawOrder;
+  const o = typeof rawOrder.toJSON === 'function' ? rawOrder.toJSON() : { ...rawOrder };
+  if (o._id && !o.id) {
+    o.id = o._id;
+  }
+
+  const isCompleted = o.status === 'completed';
+  const completedAt = isCompleted
+    ? (o.completedAt || o.providerResponse?.completedAt || o.updatedAt || o.createdAt)
+    : null;
+
+  let executionDurationSeconds = null;
+  let executionDurationText = '';
+  if (isCompleted && o.createdAt && completedAt) {
+    const startMs = new Date(o.createdAt).getTime();
+    const endMs = new Date(completedAt).getTime();
+    if (!isNaN(startMs) && !isNaN(endMs)) {
+      executionDurationSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
+      executionDurationText = formatDurationArabic(executionDurationSeconds);
+    }
+  }
+
+  const deliveryDetails = isCompleted ? extractOrderDeliveryDetails(o) : '';
+  const qty = Math.max(1, Number(o.quantity) || 1);
+  const totalUserPrice = Number(o.userPrice ?? o.price ?? 0);
+  const unitPrice = Number((totalUserPrice / qty).toFixed(4));
+
+  return {
+    ...o,
+    completedAt,
+    executionDurationSeconds,
+    executionDurationText,
+    deliveryDetails,
+    unitPrice,
+  };
+};
 
 const generateShortOrderId = async () => {
   let isUnique = false;
@@ -293,6 +333,7 @@ export const executePurchase = async ({
   }
 
   // 8. Create Order Record with full execution details (Successful / Processing Order)
+  const initialStatus = dispatchResult.status || 'processing';
   const order = await Order.create({
     orderId,
     userId: user._id,
@@ -310,7 +351,8 @@ export const executePurchase = async ({
     profitPercentage,
     discountPercent,
     currency: effectiveCurrency,
-    status: dispatchResult.status || 'processing',
+    status: initialStatus,
+    completedAt: initialStatus === 'completed' ? new Date() : null,
     providerOrderId: dispatchResult.providerOrderId || '',
     providerPayload: dispatchResult.providerPayload || basePayload,
     providerResponse: dispatchResult.providerResponse || null,
@@ -333,7 +375,7 @@ export const executePurchase = async ({
   });
 
   return {
-    order: order.toJSON(),
+    order: enrichOrderWithInvoiceMeta(order),
     transaction: transaction.toJSON(),
     user: {
       id: user._id,
@@ -450,6 +492,7 @@ export const syncOrdersBatch = async (ordersList) => {
             updatedCount++;
           } else if (res.status === 'completed' && order.status !== 'completed') {
             order.status = 'completed';
+            order.completedAt = order.completedAt || new Date();
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
             await order.save();
@@ -474,6 +517,7 @@ export const syncOrdersBatch = async (ordersList) => {
             updatedCount++;
           } else if (res.status === 'completed' && order.status !== 'completed') {
             order.status = 'completed';
+            order.completedAt = order.completedAt || new Date();
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
             await order.save();
@@ -496,6 +540,7 @@ export const syncOrdersBatch = async (ordersList) => {
           updatedCount++;
         } else if (checkResult.status === 'completed') {
           order.status = 'completed';
+          order.completedAt = order.completedAt || new Date();
           if (checkResult.rawData) order.providerResponse = checkResult.rawData;
           await order.save();
           updatedCount++;
@@ -538,7 +583,7 @@ export const getUserOrders = async (userId) => {
     });
   }
 
-  return orders;
+  return orders.map(enrichOrderWithInvoiceMeta);
 };
 
 export const getAllOrdersAdmin = async (query = {}) => {
@@ -561,7 +606,7 @@ export const checkSingleOrder = async (orderId) => {
   }
 
   if (order.status === 'failed' && order.refunded) {
-    return { order: order.toJSON(), message: 'الطلب ملغي ومسترجع مسبقاً' };
+    return { order: enrichOrderWithInvoiceMeta(order), message: 'الطلب ملغي ومسترجع مسبقاً' };
   }
 
   let updated = false;
@@ -581,6 +626,7 @@ export const checkSingleOrder = async (orderId) => {
         updated = true;
       } else if (res.status === 'completed' && order.status !== 'completed') {
         order.status = 'completed';
+        order.completedAt = order.completedAt || new Date();
         if (res.rawData) order.providerResponse = res.rawData;
         if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
         await order.save();
@@ -595,6 +641,7 @@ export const checkSingleOrder = async (orderId) => {
         updated = true;
       } else if (checkResult.status === 'completed') {
         order.status = 'completed';
+        order.completedAt = order.completedAt || new Date();
         if (checkResult.rawData) order.providerResponse = checkResult.rawData;
         await order.save();
         updated = true;
@@ -603,7 +650,7 @@ export const checkSingleOrder = async (orderId) => {
   }
 
   return {
-    order: order.toJSON(),
+    order: enrichOrderWithInvoiceMeta(order),
     updated,
     status: order.status,
   };
@@ -805,16 +852,17 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
   }
 
   order.status = 'completed';
+  order.completedAt = order.completedAt || new Date();
   order.providerResponse = {
     ...(order.providerResponse || {}),
     adminNote: adminNote ? adminNote.trim() : '',
     responseData,
-    completedAt: new Date(),
+    completedAt: order.completedAt,
     actionBy: 'admin',
   };
 
   await order.save();
-  return order.toJSON ? order.toJSON() : order;
+  return enrichOrderWithInvoiceMeta(order);
 };
 
 /**
@@ -894,6 +942,7 @@ export const handleRoyaWebhook = async (data = {}) => {
     )
   ) {
     order.status = 'completed';
+    order.completedAt = order.completedAt || new Date();
     order.providerResponse = data;
     await order.save();
     console.log(`[Roya Webhook] Order #${order.orderId} successfully completed.`);
