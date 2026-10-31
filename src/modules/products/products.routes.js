@@ -34,6 +34,7 @@ const router = Router();
 
 // User / Public routes (with optional authentication to detect user currency)
 router.get('/', optionalAuthenticate, getUserList);
+router.get('/user', optionalAuthenticate, getUserList);
 router.get('/categories', optionalAuthenticate, getCategories);
 router.get('/subcategories', optionalAuthenticate, getSubCategoriesList);
 router.get('/stats', getStats);
