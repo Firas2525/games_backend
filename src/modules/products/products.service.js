@@ -979,7 +979,7 @@ export const detectProductGroupName = (name = '', category = '') => {
   return (name || '').trim();
 };
 
-// Materialize all product groups as official SubCategory documents in MongoDB
+// Materialize all product groups as official SubCategory documents in MongoDB (Bulk High Performance)
 export const materializeAllSubCategories = async (targetMainCategory = null) => {
   try {
     const unassignedMatch = {
@@ -996,7 +996,8 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
       return { totalGroups: 0, createdCount: 0, updatedCount: 0, message: 'كافة المنتجات مصنفة ومربوطة بمجلداتها مسبقاً' };
     }
 
-    const groups = {};
+    // 1. Group unassigned products in memory
+    const groups = new Map();
     for (const p of unassignedProducts) {
       let groupName = (p.subCategoryName && p.subCategoryName.trim()) || '';
       if (!groupName) {
@@ -1009,64 +1010,84 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
       }
 
       const mainCat = p.mainCategory || targetMainCategory || 'games';
-      const key = `${mainCat}:::${groupName.trim()}`;
-      if (!groups[key]) {
-        groups[key] = {
+      const key = `${mainCat}:::${groupName.toLowerCase().trim()}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
           mainCategory: mainCat,
           name: groupName.trim(),
           image: p.image || '',
           productIds: [],
-        };
-      } else if (!groups[key].image && p.image) {
-        groups[key].image = p.image;
+        });
+      } else if (!groups.get(key).image && p.image) {
+        groups.get(key).image = p.image;
       }
-      groups[key].productIds.push(p._id);
+      groups.get(key).productIds.push(p._id);
     }
 
-    let createdCount = 0;
-    let updatedCount = 0;
+    // 2. Fetch all existing root subcategories in ONE query
+    const existingFilter = { parentId: null };
+    if (targetMainCategory && targetMainCategory !== 'all') {
+      existingFilter.mainCategory = targetMainCategory;
+    }
+    const existingSubs = await SubCategory.find(existingFilter).select('_id name mainCategory imageUrl').lean();
+    const existingMap = new Map();
+    for (const s of existingSubs) {
+      existingMap.set(`${s.mainCategory}:::${s.name.toLowerCase().trim()}`, s);
+    }
 
-    for (const key of Object.keys(groups)) {
-      const grp = groups[key];
-      let subCat = await SubCategory.findOne({
-        mainCategory: grp.mainCategory,
-        name: grp.name,
-        parentId: null,
-      });
-
-      if (!subCat) {
-        subCat = await SubCategory.create({
+    // 3. Separate existing vs new subcategories
+    const toCreate = [];
+    for (const [key, grp] of groups.entries()) {
+      if (!existingMap.has(key)) {
+        toCreate.push({
           mainCategory: grp.mainCategory,
           name: grp.name,
           imageUrl: grp.image || '',
           parentId: null,
           isVisible: true,
         });
-        createdCount++;
-      } else if (!subCat.imageUrl && grp.image) {
-        subCat.imageUrl = grp.image;
-        await subCat.save();
       }
+    }
 
-      const res = await Product.updateMany(
-        { _id: { $in: grp.productIds } },
-        {
-          $set: {
-            subCategoryId: subCat._id,
-            subCategoryName: subCat.name,
-            subCategoryImage: subCat.imageUrl || grp.image || '',
-            category: subCat.name,
+    if (toCreate.length > 0) {
+      const created = await SubCategory.insertMany(toCreate);
+      for (const s of created) {
+        existingMap.set(`${s.mainCategory}:::${s.name.toLowerCase().trim()}`, s);
+      }
+    }
+
+    // 4. Update products in ONE bulk write operation
+    const bulkOps = [];
+    for (const [key, grp] of groups.entries()) {
+      const targetSub = existingMap.get(key);
+      if (targetSub && grp.productIds.length > 0) {
+        bulkOps.push({
+          updateMany: {
+            filter: { _id: { $in: grp.productIds } },
+            update: {
+              $set: {
+                subCategoryId: targetSub._id,
+                subCategoryName: targetSub.name,
+                subCategoryImage: targetSub.imageUrl || grp.image || '',
+                category: targetSub.name,
+              },
+            },
           },
-        }
-      );
-      updatedCount += res.modifiedCount;
+        });
+      }
+    }
+
+    let modifiedCount = 0;
+    if (bulkOps.length > 0) {
+      const res = await Product.bulkWrite(bulkOps, { ordered: false });
+      modifiedCount = res.modifiedCount || 0;
     }
 
     return {
-      totalGroups: Object.keys(groups).length,
-      createdCount,
-      updatedCount,
-      message: `تم تثبيت ${Object.keys(groups).length} مجلداً فرعياً وربط ${updatedCount} منتجاً بنجاح`,
+      totalGroups: groups.size,
+      createdCount: toCreate.length,
+      updatedCount: modifiedCount,
+      message: `تم تثبيت ${groups.size} مجلداً فرعياً وربط ${modifiedCount} منتجاً بنجاح`,
     };
   } catch (err) {
     console.error('Error in materializeAllSubCategories:', err);
