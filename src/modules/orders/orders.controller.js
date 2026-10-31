@@ -27,6 +27,11 @@ export const getFinancialStats = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'Financial statistics fetched successfully');
 });
 
+export const getProfitReports = asyncHandler(async (req, res) => {
+  const result = await ordersService.getProfitReportsAdmin(req.query);
+  return ApiResponse.success(res, result, 'تم جلب تقارير الأرباح والمبيعات بنجاح');
+});
+
 export const checkOrderStatus = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   const result = await ordersService.checkSingleOrder(orderId);

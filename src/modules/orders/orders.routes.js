@@ -4,6 +4,7 @@ import {
   getMyOrders,
   getAdminOrders,
   getFinancialStats,
+  getProfitReports,
   checkOrderStatus,
   syncOrders,
   getCustomOrders,
@@ -23,6 +24,7 @@ router.get('/my-orders', authenticate, getMyOrders);
 // Admin financial orders and statistics
 router.get('/admin', authenticate, authorize(ROLES.ADMIN), getAdminOrders);
 router.get('/admin/stats', authenticate, authorize(ROLES.ADMIN), getFinancialStats);
+router.get('/admin/profit-reports', authenticate, authorize(ROLES.ADMIN), getProfitReports);
 router.post('/admin/sync-pending', authenticate, authorize(ROLES.ADMIN), syncOrders);
 
 // Admin dedicated routes for "مزودي الخاص" (Custom Provider manual processing)
