@@ -1421,6 +1421,11 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   if (query.category && query.category !== 'all') {
     andClauses.push({ category: query.category });
   }
+  if (query.subCategoryId && query.subCategoryId !== 'all') {
+    if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
+      andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
+    }
+  }
   if (query.mainCategory && query.mainCategory !== 'all') {
     andClauses.push({ mainCategory: query.mainCategory });
   }
