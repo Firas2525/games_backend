@@ -425,6 +425,13 @@ export const getAdminProducts = async (query = {}) => {
   if (query.hasDiscount === 'true' || query.discounted === 'true') {
     filter.discountPercent = { $gt: 0 };
   }
+  if (query.subCategoryId !== undefined) {
+    if (query.subCategoryId === 'null' || query.subCategoryId === 'none' || query.subCategoryId === 'root') {
+      filter.$or = [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }];
+    } else if (query.subCategoryId && query.subCategoryId !== 'all') {
+      filter.subCategoryId = query.subCategoryId;
+    }
+  }
   if (query.search) {
     filter.$or = [
       { name: { $regex: query.search, $options: 'i' } },
@@ -917,8 +924,124 @@ export const updateCategoryGroup = async (categoryName, mainCategory) => {
   };
 };
 
+// Helper to detect smart product groups matching user app
+export const detectProductGroupName = (name = '', category = '') => {
+  const combined = `${name || ''} ${category || ''}`.toLowerCase();
+
+  // 1. Popular Game Families
+  if (combined.includes('pubg') || combined.includes('ببجي') || combined.includes('بوبجي')) return 'ببجي موبايل (PUBG Mobile)';
+  if (combined.includes('free fire') || combined.includes('freefire') || combined.includes('فري فاير') || combined.includes('فاير')) return 'فري فاير (Free Fire)';
+  if (combined.includes('roblox') || combined.includes('روبلوكس')) return 'روبلوكس (Roblox)';
+  if (combined.includes('call of duty') || combined.includes('codm') || combined.includes('كول اوف ديوتي') || combined.includes('كود موبايل')) return 'كول أوف ديوتي (Call of Duty)';
+  if (combined.includes('mobile legends') || combined.includes('موبايل ليجند') || combined.includes('mlbb')) return 'موبايل ليجندز (Mobile Legends)';
+  if (combined.includes('yalla ludo') || combined.includes('يلا لودو') || combined.includes('لودو')) return 'يلا لودو (Yalla Ludo)';
+  if (combined.includes('jawaker') || combined.includes('جواكر')) return 'جواكر (Jawaker)';
+  if (combined.includes('clash of clans') || combined.includes('كلاش اوف كلانس')) return 'كلاش أوف كلانس (Clash of Clans)';
+  if (combined.includes('clash royale') || combined.includes('كلاش رويال')) return 'كلاش رويال (Clash Royale)';
+  if (combined.includes('brawl stars') || combined.includes('براول ستارز')) return 'براول ستارز (Brawl Stars)';
+  if (combined.includes('fifa') || combined.includes('fc mobile') || combined.includes('فيفا') || combined.includes('اف سي')) return 'إي إيه إف سي (EA FC Mobile)';
+  if (combined.includes('genshin') || combined.includes('قنشن') || combined.includes('جينشن')) return 'جينشين إمباكت (Genshin Impact)';
+
+  // 2. Apps & Subscriptions
+  if (combined.includes('tiktok') || combined.includes('تيك توك')) return 'تيك توك (TikTok)';
+  if (combined.includes('likee') || combined.includes('لايكي')) return 'لايكي (Likee)';
+  if (combined.includes('bigo') || combined.includes('بيجو')) return 'بيجو لايف (Bigo Live)';
+  if (combined.includes('telegram') || combined.includes('تليجرام') || combined.includes('تلغرام')) return 'تليجرام بريميوم (Telegram)';
+  if (combined.includes('netflix') || combined.includes('نتفلكس') || combined.includes('نتفليكس')) return 'نتفلكس (Netflix)';
+  if (combined.includes('shahid') || combined.includes('شاهد')) return 'شاهد VIP (Shahid)';
+  if (combined.includes('youtube') || combined.includes('يوتيوب')) return 'يوتيوب بريميوم (YouTube)';
+  if (combined.includes('spotify') || combined.includes('سبوتيفاي')) return 'سبوتيفاي (Spotify)';
+
+  // 3. Digital Cards
+  if (combined.includes('google play') || combined.includes('جوجل بلاي') || combined.includes('قوقل بلاي')) return 'بطاقات جوجل بلاي (Google Play)';
+  if (combined.includes('itunes') || combined.includes('apple') || combined.includes('ايتونز') || combined.includes('ابل') || combined.includes('آبل')) return 'بطاقات آبل (iTunes / App Store)';
+  if (combined.includes('playstation') || combined.includes('بلايستيشن') || combined.includes('psn')) return 'بطاقات بلايستيشن (PlayStation)';
+  if (combined.includes('razer') || combined.includes('رايزر') || combined.includes('رازر')) return 'بطاقات رايزر جولد (Razer Gold)';
+  if (combined.includes('steam') || combined.includes('ستيم')) return 'بطاقات ستيم (Steam)';
+  if (combined.includes('xbox') || combined.includes('اكس بوكس')) return 'بطاقات إكس بوكس (Xbox)';
+
+  const trimmedCat = (category || '').trim();
+  if (trimmedCat && trimmedCat !== 'عام' && trimmedCat !== 'عامة' && trimmedCat !== 'Uncategorized') {
+    return trimmedCat;
+  }
+  return null;
+};
+
 // 6.3 Sub-Categories Management (Groups / Folders within a Main Category)
 export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined) => {
+  // Auto-materialize unassigned products into real SubCategories
+  if (!parentId || parentId === 'all' || parentId === 'root' || parentId === 'null') {
+    try {
+      const unassignedMatch = {
+        $or: [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }],
+      };
+      if (mainCategory && mainCategory !== 'all') {
+        unassignedMatch.mainCategory = mainCategory;
+      }
+      const unassignedProducts = await Product.find(unassignedMatch)
+        .select('_id name category image mainCategory subCategoryName')
+        .lean();
+
+      if (unassignedProducts.length > 0) {
+        const groups = {};
+        for (const p of unassignedProducts) {
+          const groupName = (p.subCategoryName && p.subCategoryName.trim())
+            ? p.subCategoryName.trim()
+            : detectProductGroupName(p.name, p.category);
+          if (!groupName) continue;
+          const mainCat = p.mainCategory || mainCategory || 'games';
+          const key = `${mainCat}:::${groupName}`;
+          if (!groups[key]) {
+            groups[key] = {
+              mainCategory: mainCat,
+              name: groupName,
+              image: p.image || '',
+              productIds: [],
+            };
+          } else if (!groups[key].image && p.image) {
+            groups[key].image = p.image;
+          }
+          groups[key].productIds.push(p._id);
+        }
+
+        for (const key of Object.keys(groups)) {
+          const grp = groups[key];
+          let subCat = await SubCategory.findOne({
+            mainCategory: grp.mainCategory,
+            name: grp.name,
+            parentId: null,
+          });
+
+          if (!subCat) {
+            subCat = await SubCategory.create({
+              mainCategory: grp.mainCategory,
+              name: grp.name,
+              imageUrl: grp.image,
+              parentId: null,
+              isVisible: true,
+            });
+          } else if (!subCat.imageUrl && grp.image) {
+            subCat.imageUrl = grp.image;
+            await subCat.save();
+          }
+
+          await Product.updateMany(
+            { _id: { $in: grp.productIds } },
+            {
+              $set: {
+                subCategoryId: subCat._id,
+                subCategoryName: subCat.name,
+                subCategoryImage: subCat.imageUrl || grp.image || '',
+              },
+            }
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error auto-syncing subcategories from unassigned products:', err);
+    }
+  }
+
   const filter = { isVisible: true };
   if (mainCategory && mainCategory !== 'all') {
     filter.mainCategory = mainCategory;
