@@ -704,20 +704,24 @@ export const buildCurrencyProductFilter = (currencyStr) => {
 };
 
 // 6.0 Get all categories with product counts (filtered by user currency & cached in memory)
-export const getAllCategories = async (userCurrency = null) => {
+export const getAllCategories = async (userCurrency = null, isAdmin = false) => {
   const cacheKey = `categories_${userCurrency || 'all'}`;
-  const cached = serverCache.get(cacheKey);
-  if (cached) return cached;
+  if (!isAdmin) {
+    const cached = serverCache.get(cacheKey);
+    if (cached) return cached;
+  }
 
   await ensureDefaultCategories();
   const categories = await Category.find({ isVisible: true }).sort({ sortOrder: 1, createdAt: 1 });
 
   const currencyFilter = buildCurrencyProductFilter(userCurrency);
   const matchFilter = {
-    isAvailable: { $ne: false },
-    isVisible: { $ne: false },
     source: { $nin: ['syria_card', 'auto1card'] },
   };
+  if (!isAdmin) {
+    matchFilter.isAvailable = { $ne: false };
+    matchFilter.isVisible = { $ne: false };
+  }
   if (currencyFilter) {
     matchFilter.$and = [currencyFilter];
   }

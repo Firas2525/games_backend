@@ -69,7 +69,8 @@ const extractUserCurrency = (req) => {
 
 export const getCategories = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
-  const result = await productsService.getAllCategories(userCurrency);
+  const isAdmin = req.user?.role === 'admin' || req.query.admin === 'true';
+  const result = await productsService.getAllCategories(userCurrency, isAdmin);
   return ApiResponse.success(res, result, 'Categories fetched successfully');
 });
 
