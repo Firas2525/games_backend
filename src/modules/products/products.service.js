@@ -431,6 +431,7 @@ export const getAdminProducts = async (query = {}) => {
       filter.subCategoryId = null;
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
       filter.subCategoryId = new mongoose.Types.ObjectId(query.subCategoryId);
+      delete filter.mainCategory;
     }
   }
   if (query.search) {
