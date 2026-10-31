@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 import { SalaryService, SalaryWithdrawalRequest } from './salaryWithdrawal.model.js';
+import { User } from '../users/users.model.js';
+import { Transaction } from '../users/transactions.model.js';
+import { getSettings } from '../settings/settings.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
@@ -81,6 +84,15 @@ export const submitSalaryWithdrawal = async (req, res) => {
     const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
     const requestId = `SAL-${Date.now().toString().slice(-4)}${randomHex}`;
 
+    let calculatedDollars = 0;
+    if (service.withdrawalType === 'dollars') {
+      calculatedDollars = Number(qty.toFixed(4));
+    } else {
+      const cUnit = Math.max(1, Number(service.coinsPerUnit) || 1000);
+      const dUnit = Math.max(0.0001, Number(service.dollarsPerUnit) || 1.0);
+      calculatedDollars = Number(((qty / cUnit) * dUnit).toFixed(4));
+    }
+
     const newRequest = await SalaryWithdrawalRequest.create({
       requestId,
       userId,
@@ -92,6 +104,11 @@ export const submitSalaryWithdrawal = async (req, res) => {
       serviceName: service.name,
       serviceImage: service.imageUrl || '',
       quantity: qty,
+      adminReceiverId: service.adminReceiverId || '',
+      withdrawalType: service.withdrawalType || 'coins',
+      coinsPerUnit: service.coinsPerUnit || 1000,
+      dollarsPerUnit: service.dollarsPerUnit || 1.0,
+      calculatedDollars,
       fieldsData: submittedFields,
       status: 'pending',
     });
@@ -148,6 +165,10 @@ export const createSalaryService = async (req, res) => {
       minQuantity,
       maxQuantity,
       unitName,
+      adminReceiverId,
+      withdrawalType,
+      coinsPerUnit,
+      dollarsPerUnit,
       isActive,
       sortOrder,
     } = req.body;
@@ -160,6 +181,8 @@ export const createSalaryService = async (req, res) => {
       ? requiredFields.map((f) => String(f).trim()).filter(Boolean)
       : [];
 
+    const isCoins = (withdrawalType || 'coins') === 'coins';
+
     const newService = await SalaryService.create({
       name: name.trim(),
       description: description ? description.trim() : '',
@@ -167,7 +190,11 @@ export const createSalaryService = async (req, res) => {
       requiredFields: cleanedFields,
       minQuantity: minQuantity !== undefined ? Number(minQuantity) : 1,
       maxQuantity: maxQuantity !== undefined ? Number(maxQuantity) : 10000,
-      unitName: unitName ? unitName.trim() : 'كمية',
+      unitName: unitName ? unitName.trim() : (isCoins ? 'كوينز' : 'دولار'),
+      adminReceiverId: adminReceiverId ? String(adminReceiverId).trim() : '',
+      withdrawalType: isCoins ? 'coins' : 'dollars',
+      coinsPerUnit: Math.max(1, Number(coinsPerUnit) || 1000),
+      dollarsPerUnit: Math.max(0.0001, Number(dollarsPerUnit) || 1.0),
       isActive: isActive !== undefined ? Boolean(isActive) : true,
       sortOrder: sortOrder !== undefined ? Number(sortOrder) : 0,
     });
@@ -192,6 +219,10 @@ export const updateSalaryService = async (req, res) => {
       minQuantity,
       maxQuantity,
       unitName,
+      adminReceiverId,
+      withdrawalType,
+      coinsPerUnit,
+      dollarsPerUnit,
       isActive,
       sortOrder,
     } = req.body;
@@ -210,6 +241,10 @@ export const updateSalaryService = async (req, res) => {
     if (minQuantity !== undefined) service.minQuantity = Number(minQuantity);
     if (maxQuantity !== undefined) service.maxQuantity = Number(maxQuantity);
     if (unitName !== undefined) service.unitName = unitName.trim();
+    if (adminReceiverId !== undefined) service.adminReceiverId = String(adminReceiverId).trim();
+    if (withdrawalType !== undefined) service.withdrawalType = withdrawalType === 'dollars' ? 'dollars' : 'coins';
+    if (coinsPerUnit !== undefined) service.coinsPerUnit = Math.max(1, Number(coinsPerUnit) || 1000);
+    if (dollarsPerUnit !== undefined) service.dollarsPerUnit = Math.max(0.0001, Number(dollarsPerUnit) || 1.0);
     if (isActive !== undefined) service.isActive = Boolean(isActive);
     if (sortOrder !== undefined) service.sortOrder = Number(sortOrder);
 
@@ -286,6 +321,91 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
     const request = await SalaryWithdrawalRequest.findById(id);
     if (!request) {
       return ApiResponse.error(res, 'الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
+    }
+
+    // Handle Approval: Credit user wallet with calculated dollars
+    if (status === 'approved') {
+      if (request.isCredited) {
+        return ApiResponse.error(
+          res,
+          'تم اعتماد هذا الطلب وإيداع الرصيد للمستخدم مسبقاً',
+          HTTP_STATUS.BAD_REQUEST
+        );
+      }
+
+      const user = await User.findById(request.userId);
+      if (!user) {
+        return ApiResponse.error(res, 'المستخدم صاحب الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
+      }
+
+      const settings = await getSettings();
+      const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+      // Determine dollars amount: use calculatedDollars, or fallback to quantity
+      let dollarsAmount = Number(request.calculatedDollars || 0);
+      if (dollarsAmount <= 0) {
+        if (request.withdrawalType === 'dollars') {
+          dollarsAmount = Number(request.quantity || 0);
+        } else {
+          const cUnit = Math.max(1, Number(request.coinsPerUnit) || 1000);
+          const dUnit = Math.max(0.0001, Number(request.dollarsPerUnit) || 1.0);
+          dollarsAmount = Number(((request.quantity / cUnit) * dUnit).toFixed(4));
+        }
+      }
+
+      let creditAmount = dollarsAmount;
+      let effectiveCurrency = 'USD';
+      if (user.currency === 'SYP') {
+        creditAmount = Math.round(dollarsAmount * exchangeRate);
+        effectiveCurrency = 'SYP';
+      }
+
+      const prevBal = Number((user.balance || 0).toFixed(4));
+      const newBal = Number((prevBal + creditAmount).toFixed(4));
+
+      user.balance = newBal;
+      await user.save();
+
+      // Create deposit transaction in user history
+      const transaction = await Transaction.create({
+        userId: user._id,
+        adminId: req.user?._id,
+        type: 'deposit',
+        currency: effectiveCurrency,
+        amount: creditAmount,
+        previousBalance: prevBal,
+        newBalance: newBal,
+        note: `إيداع سحب أرباح تطبيقات (${request.serviceName}) - ${request.quantity} ${request.withdrawalType === 'coins' ? 'كوينز' : 'دولار'} [طلب #${request.requestId}]`,
+      });
+
+      request.isCredited = true;
+      request.creditedAmount = creditAmount;
+      request.creditedCurrency = effectiveCurrency;
+      request.transactionId = transaction._id;
+      request.status = 'approved';
+      if (adminNotes !== undefined) {
+        request.adminNotes = adminNotes ? String(adminNotes).trim() : '';
+      }
+      await request.save();
+
+      return ApiResponse.success(
+        res,
+        {
+          request,
+          creditedAmount,
+          effectiveCurrency,
+          newBalance: newBal,
+        },
+        `تم قبول الطلب واعتماده بنجاح، وتمت إضافة ${creditAmount} ${effectiveCurrency} إلى رصيد المستخدم 💵`
+      );
+    }
+
+    if (request.isCredited && status !== 'approved') {
+      return ApiResponse.error(
+        res,
+        'لا يمكن إلغاء أو رفض طلب تم اعتماده وإيداع رصيده في محفظة المستخدم بالفعل',
+        HTTP_STATUS.BAD_REQUEST
+      );
     }
 
     request.status = status;

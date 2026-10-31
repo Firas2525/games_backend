@@ -38,6 +38,29 @@ const salaryServiceSchema = new mongoose.Schema(
       default: 'كمية',
       trim: true,
     },
+    // Admin receiver account ID in the external app (e.g. Bigo ID, TikTok ID)
+    adminReceiverId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    // Type of withdrawal: 'coins' (points/diamonds/coins) or 'dollars' (direct USD)
+    withdrawalType: {
+      type: String,
+      enum: ['coins', 'dollars'],
+      default: 'coins',
+    },
+    // Coins conversion rate: every [coinsPerUnit] coins = [dollarsPerUnit] USD
+    coinsPerUnit: {
+      type: Number,
+      default: 1000,
+      min: [1, 'كمية الكوينزات يجب أن تكون 1 على الأقل'],
+    },
+    dollarsPerUnit: {
+      type: Number,
+      default: 1.0,
+      min: [0.0001, 'قيمة الدولار يجب أن تكون أكبر من الصفر'],
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -106,6 +129,46 @@ const salaryWithdrawalRequestSchema = new mongoose.Schema(
       type: Number,
       required: [true, 'الكمية مطلوبة'],
       min: [1, 'الكمية يجب أن تكون 1 على الأقل'],
+    },
+    adminReceiverId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    withdrawalType: {
+      type: String,
+      enum: ['coins', 'dollars'],
+      default: 'coins',
+    },
+    coinsPerUnit: {
+      type: Number,
+      default: 1000,
+    },
+    dollarsPerUnit: {
+      type: Number,
+      default: 1.0,
+    },
+    calculatedDollars: {
+      type: Number,
+      default: 0,
+    },
+    creditedAmount: {
+      type: Number,
+      default: 0,
+    },
+    creditedCurrency: {
+      type: String,
+      default: 'USD',
+    },
+    isCredited: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    transactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transaction',
+      default: null,
     },
     fieldsData: {
       type: Map,
