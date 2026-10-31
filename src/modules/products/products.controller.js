@@ -125,6 +125,12 @@ export const bulkAssignSubCategory = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, `تم تجميع ${result.modifiedCount} منتج في التصنيف الفرعي بنجاح`);
 });
 
+export const materializeSubCategories = asyncHandler(async (req, res) => {
+  const targetCat = req.query.mainCategory || req.body?.mainCategory || null;
+  const result = await productsService.materializeAllSubCategories(targetCat);
+  return ApiResponse.success(res, result, result.message);
+});
+
 export const getUserList = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
   const result = await productsService.getUserProducts(req.query, userCurrency);

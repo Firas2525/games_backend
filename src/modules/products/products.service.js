@@ -941,6 +941,11 @@ export const detectProductGroupName = (name = '', category = '') => {
   if (combined.includes('brawl stars') || combined.includes('براول ستارز')) return 'براول ستارز (Brawl Stars)';
   if (combined.includes('fifa') || combined.includes('fc mobile') || combined.includes('فيفا') || combined.includes('اف سي')) return 'إي إيه إف سي (EA FC Mobile)';
   if (combined.includes('genshin') || combined.includes('قنشن') || combined.includes('جينشن')) return 'جينشين إمباكت (Genshin Impact)';
+  if (combined.includes('8 ball') || combined.includes('8ball') || combined.includes('8 بول') || combined.includes('ايت بول') || combined.includes('بلياردو')) return '8 بول (8 Ball Pool)';
+  if (combined.includes('hay day') || combined.includes('هاي داي')) return 'هاي داي (Hay Day)';
+  if (combined.includes('efootball') || combined.includes('بيس') || combined.includes('pes')) return 'إي فوتبول بيس (eFootball PES)';
+  if (combined.includes('toptop') || combined.includes('توب توب')) return 'توب توب (TopTop)';
+  if (combined.includes('ludo club') || combined.includes('لودو كلوب')) return 'لودو كلوب (Ludo Club)';
 
   // 2. Apps & Subscriptions
   if (combined.includes('tiktok') || combined.includes('تيك توك')) return 'تيك توك (TikTok)';
@@ -951,6 +956,12 @@ export const detectProductGroupName = (name = '', category = '') => {
   if (combined.includes('shahid') || combined.includes('شاهد')) return 'شاهد VIP (Shahid)';
   if (combined.includes('youtube') || combined.includes('يوتيوب')) return 'يوتيوب بريميوم (YouTube)';
   if (combined.includes('spotify') || combined.includes('سبوتيفاي')) return 'سبوتيفاي (Spotify)';
+  if (combined.includes('anghami') || combined.includes('انغامي') || combined.includes('أنغامي')) return 'أنغامي (Anghami)';
+  if (combined.includes('discord') || combined.includes('ديسكورد')) return 'ديسكورد نيترو (Discord Nitro)';
+  if (combined.includes('chatgpt') || combined.includes('شات جي بي تي')) return 'شات جي بي تي (ChatGPT Plus)';
+  if (combined.includes('tango') || combined.includes('تانغو') || combined.includes('تانجو')) return 'تانجو (Tango)';
+  if (combined.includes('mico') || combined.includes('ميكو')) return 'ميكو لايف (Mico Live)';
+  if (combined.includes('soulchill') || combined.includes('سول شيل')) return 'سول شيل (Soulchill)';
 
   // 3. Digital Cards
   if (combined.includes('google play') || combined.includes('جوجل بلاي') || combined.includes('قوقل بلاي')) return 'بطاقات جوجل بلاي (Google Play)';
@@ -964,7 +975,102 @@ export const detectProductGroupName = (name = '', category = '') => {
   if (trimmedCat && trimmedCat !== 'عام' && trimmedCat !== 'عامة' && trimmedCat !== 'Uncategorized') {
     return trimmedCat;
   }
-  return null;
+  return (name || '').trim();
+};
+
+// Materialize all product groups as official SubCategory documents in MongoDB
+export const materializeAllSubCategories = async (targetMainCategory = null) => {
+  try {
+    const unassignedMatch = {
+      $or: [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }],
+    };
+    if (targetMainCategory && targetMainCategory !== 'all') {
+      unassignedMatch.mainCategory = targetMainCategory;
+    }
+    const unassignedProducts = await Product.find(unassignedMatch)
+      .select('_id name category image mainCategory subCategoryName')
+      .lean();
+
+    if (unassignedProducts.length === 0) {
+      return { totalGroups: 0, createdCount: 0, updatedCount: 0, message: 'كافة المنتجات مصنفة ومربوطة بمجلداتها مسبقاً' };
+    }
+
+    const groups = {};
+    for (const p of unassignedProducts) {
+      let groupName = (p.subCategoryName && p.subCategoryName.trim()) || '';
+      if (!groupName) {
+        groupName = detectProductGroupName(p.name, p.category);
+      }
+      if (!groupName || groupName === 'عام' || groupName === 'عامة' || groupName === 'Uncategorized') {
+        groupName = (p.category && p.category.trim() && p.category !== 'عام') 
+          ? p.category.trim() 
+          : (p.name && p.name.trim()) || 'عام';
+      }
+
+      const mainCat = p.mainCategory || targetMainCategory || 'games';
+      const key = `${mainCat}:::${groupName.trim()}`;
+      if (!groups[key]) {
+        groups[key] = {
+          mainCategory: mainCat,
+          name: groupName.trim(),
+          image: p.image || '',
+          productIds: [],
+        };
+      } else if (!groups[key].image && p.image) {
+        groups[key].image = p.image;
+      }
+      groups[key].productIds.push(p._id);
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    for (const key of Object.keys(groups)) {
+      const grp = groups[key];
+      let subCat = await SubCategory.findOne({
+        mainCategory: grp.mainCategory,
+        name: grp.name,
+        parentId: null,
+      });
+
+      if (!subCat) {
+        subCat = await SubCategory.create({
+          mainCategory: grp.mainCategory,
+          name: grp.name,
+          imageUrl: grp.image || '',
+          parentId: null,
+          isVisible: true,
+        });
+        createdCount++;
+      } else if (!subCat.imageUrl && grp.image) {
+        subCat.imageUrl = grp.image;
+        await subCat.save();
+      }
+
+      const res = await Product.updateMany(
+        { _id: { $in: grp.productIds } },
+        {
+          $set: {
+            subCategoryId: subCat._id,
+            subCategoryName: subCat.name,
+            subCategoryImage: subCat.imageUrl || grp.image || '',
+            category: subCat.name,
+          },
+        }
+      );
+      updatedCount += res.modifiedCount;
+    }
+
+    return {
+      totalGroups: Object.keys(groups).length,
+      createdCount,
+      updatedCount,
+      message: `تم تثبيت ${Object.keys(groups).length} مجلداً فرعياً وربط ${updatedCount} منتجاً بنجاح`,
+    };
+  } catch (err) {
+    console.error('Error in materializeAllSubCategories:', err);
+    throw err;
+  }
 };
 
 // 6.3 Sub-Categories Management (Groups / Folders within a Main Category)
@@ -972,73 +1078,9 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   // Auto-materialize unassigned products into real SubCategories
   if (!parentId || parentId === 'all' || parentId === 'root' || parentId === 'null') {
     try {
-      const unassignedMatch = {
-        $or: [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }],
-      };
-      if (mainCategory && mainCategory !== 'all') {
-        unassignedMatch.mainCategory = mainCategory;
-      }
-      const unassignedProducts = await Product.find(unassignedMatch)
-        .select('_id name category image mainCategory subCategoryName')
-        .lean();
-
-      if (unassignedProducts.length > 0) {
-        const groups = {};
-        for (const p of unassignedProducts) {
-          const groupName = (p.subCategoryName && p.subCategoryName.trim())
-            ? p.subCategoryName.trim()
-            : detectProductGroupName(p.name, p.category);
-          if (!groupName) continue;
-          const mainCat = p.mainCategory || mainCategory || 'games';
-          const key = `${mainCat}:::${groupName}`;
-          if (!groups[key]) {
-            groups[key] = {
-              mainCategory: mainCat,
-              name: groupName,
-              image: p.image || '',
-              productIds: [],
-            };
-          } else if (!groups[key].image && p.image) {
-            groups[key].image = p.image;
-          }
-          groups[key].productIds.push(p._id);
-        }
-
-        for (const key of Object.keys(groups)) {
-          const grp = groups[key];
-          let subCat = await SubCategory.findOne({
-            mainCategory: grp.mainCategory,
-            name: grp.name,
-            parentId: null,
-          });
-
-          if (!subCat) {
-            subCat = await SubCategory.create({
-              mainCategory: grp.mainCategory,
-              name: grp.name,
-              imageUrl: grp.image,
-              parentId: null,
-              isVisible: true,
-            });
-          } else if (!subCat.imageUrl && grp.image) {
-            subCat.imageUrl = grp.image;
-            await subCat.save();
-          }
-
-          await Product.updateMany(
-            { _id: { $in: grp.productIds } },
-            {
-              $set: {
-                subCategoryId: subCat._id,
-                subCategoryName: subCat.name,
-                subCategoryImage: subCat.imageUrl || grp.image || '',
-              },
-            }
-          );
-        }
-      }
+      await materializeAllSubCategories(mainCategory);
     } catch (err) {
-      console.error('Error auto-syncing subcategories from unassigned products:', err);
+      console.error('Error auto-syncing subcategories:', err);
     }
   }
 

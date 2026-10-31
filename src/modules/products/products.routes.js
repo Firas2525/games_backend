@@ -19,6 +19,7 @@ import {
   editSubCategory,
   removeSubCategory,
   bulkAssignSubCategory,
+  materializeSubCategories,
   getUserList,
   getDetails,
   updateDiscount,
@@ -40,6 +41,8 @@ router.get('/sync-now', triggerSync);
 router.post('/sync-now', triggerSync);
 router.get('/reclassify', reclassify);
 router.post('/reclassify', reclassify);
+router.get('/materialize-subcategories', materializeSubCategories);
+router.post('/materialize-subcategories', materializeSubCategories);
 router.get('/:id/details', optionalAuthenticate, getDetails);
 
 // Admin-only protected routes
