@@ -1108,11 +1108,11 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   }
 
   const filter = { isVisible: true };
-  if (mainCategory && mainCategory !== 'all') {
-    filter.mainCategory = mainCategory;
-  }
   if (parentId === 'root' || parentId === 'null' || !parentId) {
     filter.parentId = null;
+    if (mainCategory && mainCategory !== 'all') {
+      filter.mainCategory = mainCategory;
+    }
   } else if (parentId && parentId !== 'all') {
     if (mongoose.Types.ObjectId.isValid(parentId)) {
       filter.parentId = new mongoose.Types.ObjectId(parentId);
@@ -1429,11 +1429,13 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
           { subCategoryId: { $exists: false } },
         ],
       });
+      if (query.mainCategory && query.mainCategory !== 'all') {
+        andClauses.push({ mainCategory: query.mainCategory });
+      }
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
       andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
     }
-  }
-  if (query.mainCategory && query.mainCategory !== 'all') {
+  } else if (query.mainCategory && query.mainCategory !== 'all') {
     andClauses.push({ mainCategory: query.mainCategory });
   }
   if (query.search) {
