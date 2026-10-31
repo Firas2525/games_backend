@@ -1422,7 +1422,14 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     andClauses.push({ category: query.category });
   }
   if (query.subCategoryId && query.subCategoryId !== 'all') {
-    if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
+    if (query.subCategoryId === 'root' || query.subCategoryId === 'null') {
+      andClauses.push({
+        $or: [
+          { subCategoryId: null },
+          { subCategoryId: { $exists: false } },
+        ],
+      });
+    } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
       andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
     }
   }
