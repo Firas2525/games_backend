@@ -1377,24 +1377,55 @@ export const updateSubCategory = async (id, data) => {
   const { name, imageUrl, mainCategory, parentId, productIds, isVisible } = data;
   if (name !== undefined) subCategory.name = name.trim();
   if (imageUrl !== undefined) subCategory.imageUrl = imageUrl.trim();
-  if (mainCategory !== undefined) subCategory.mainCategory = mainCategory.trim();
   if (isVisible !== undefined) subCategory.isVisible = isVisible;
+
+  // Helper to fetch all descendant subcategory IDs recursively (prevents cyclic hierarchy)
+  const getAllDescendants = async (rootId) => {
+    const descendants = [];
+    const queue = [rootId];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const children = await SubCategory.find({ parentId: current }).select('_id').lean();
+      for (const child of children) {
+        descendants.push(child._id);
+        queue.push(child._id);
+      }
+    }
+    return descendants;
+  };
+
+  let targetMainCategory = mainCategory ? mainCategory.trim() : subCategory.mainCategory;
+
   if (parentId !== undefined) {
     if (parentId && parentId !== 'null' && parentId !== 'root') {
       if (parentId.toString() === id.toString()) {
-        throw new ApiError('لا يمكن تعيين المجلد كأب لنفسه', HTTP_STATUS.BAD_REQUEST);
+        throw new ApiError('لا يمكن نقل المجلد إلى داخل نفسه', HTTP_STATUS.BAD_REQUEST);
       }
+      const descendants = await getAllDescendants(id);
+      const isDescendant = descendants.some((d) => d.toString() === parentId.toString());
+      if (isDescendant) {
+        throw new ApiError('لا يمكن نقل المجلد إلى داخل أحد مجلداته الفرعية', HTTP_STATUS.BAD_REQUEST);
+      }
+
       const parentSub = await SubCategory.findById(parentId);
       if (parentSub) {
         subCategory.parentId = parentSub._id;
-        subCategory.mainCategory = parentSub.mainCategory;
+        targetMainCategory = parentSub.mainCategory;
       }
     } else {
       subCategory.parentId = null;
     }
   }
 
+  const mainCategoryChanged = targetMainCategory && targetMainCategory !== subCategory.mainCategory;
+  if (targetMainCategory) {
+    subCategory.mainCategory = targetMainCategory;
+  }
+
   await subCategory.save();
+
+  // If subcategory or main category changed, update this folder and all its contents
+  const allSubCategoryIds = [subCategory._id, ...(await getAllDescendants(subCategory._id))];
 
   await Product.updateMany(
     { subCategoryId: subCategory._id },
@@ -1407,6 +1438,19 @@ export const updateSubCategory = async (id, data) => {
       },
     }
   );
+
+  if (mainCategoryChanged) {
+    // Update all descendant subcategories to the new mainCategory
+    await SubCategory.updateMany(
+      { _id: { $in: allSubCategoryIds } },
+      { $set: { mainCategory: subCategory.mainCategory } }
+    );
+    // Update all products in all descendant subcategories
+    await Product.updateMany(
+      { subCategoryId: { $in: allSubCategoryIds } },
+      { $set: { mainCategory: subCategory.mainCategory } }
+    );
+  }
 
   if (Array.isArray(productIds)) {
     await Product.updateMany(
