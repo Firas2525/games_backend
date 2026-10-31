@@ -1,4 +1,5 @@
 import { Settings } from './settings.model.js';
+import { LEVEL_CONFIG, LEVELS } from '../../constants/levels.js';
 
 export const getSettings = async () => {
   let settings = await Settings.findOne({ key: 'system_settings' });
@@ -44,5 +45,62 @@ export const getTickerSettings = async () => {
 
 export const updateTickerSettings = async ({ tickerText, isTickerActive }) => {
   return await updateSettings({ tickerText, isTickerActive });
+};
+
+export const getLevelSettings = async () => {
+  const settings = await getSettings();
+  const badgesMap = settings.levelBadges || new Map();
+
+  const getBadge = (key) => {
+    if (badgesMap instanceof Map) return badgesMap.get(key) || '';
+    if (typeof badgesMap === 'object') return badgesMap[key] || '';
+    return '';
+  };
+
+  const levels = LEVEL_CONFIG.map((tier) => ({
+    ...tier,
+    badgeUrl: getBadge(tier.key),
+  }));
+
+  const badges = {};
+  for (const tier of LEVEL_CONFIG) {
+    badges[tier.key] = getBadge(tier.key);
+  }
+
+  return {
+    levels,
+    badges,
+  };
+};
+
+export const updateLevelBadge = async ({ levelKey, badgeUrl }) => {
+  if (!levelKey || !Object.values(LEVELS).includes(levelKey)) {
+    throw new Error('مفتاح المستوى غير صالح');
+  }
+
+  const settings = await getSettings();
+  if (!settings.levelBadges) {
+    settings.levelBadges = new Map();
+  }
+
+  const cleanUrl = badgeUrl ? String(badgeUrl).trim() : '';
+  if (cleanUrl) {
+    if (settings.levelBadges instanceof Map) {
+      settings.levelBadges.set(levelKey, cleanUrl);
+    } else {
+      settings.levelBadges[levelKey] = cleanUrl;
+    }
+  } else {
+    if (settings.levelBadges instanceof Map) {
+      settings.levelBadges.delete(levelKey);
+    } else {
+      delete settings.levelBadges[levelKey];
+    }
+  }
+
+  settings.markModified('levelBadges');
+  await settings.save();
+
+  return await getLevelSettings();
 };
 

@@ -22,3 +22,13 @@ export const updateTicker = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'تم تحديث شريط الإعلانات المتحرك بنجاح');
 });
 
+export const getLevels = asyncHandler(async (req, res) => {
+  const result = await settingsService.getLevelSettings();
+  return ApiResponse.success(res, result, 'Levels settings fetched successfully');
+});
+
+export const updateLevelBadge = asyncHandler(async (req, res) => {
+  const result = await settingsService.updateLevelBadge(req.body);
+  return ApiResponse.success(res, result, 'تم تحديث شارة المستوى بنجاح 🎖️');
+});
+

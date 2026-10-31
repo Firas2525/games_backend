@@ -232,3 +232,4 @@ export const updateVerificationStatus = async (req, res) => {
     return ApiResponse.error(res, error.message);
   }
 };
+

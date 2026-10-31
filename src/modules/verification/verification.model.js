@@ -72,3 +72,4 @@ export const VerificationRequest = mongoose.model(
   'VerificationRequest',
   verificationRequestSchema
 );
+

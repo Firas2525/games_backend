@@ -19,3 +19,4 @@ router.get('/admin/requests', authenticate, authorize(ROLES.ADMIN), getAdminVeri
 router.patch('/admin/requests/:id/status', authenticate, authorize(ROLES.ADMIN), updateVerificationStatus);
 
 export default router;
+

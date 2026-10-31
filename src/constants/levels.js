@@ -14,6 +14,7 @@ export const LEVEL_CONFIG = [
     min: 0,
     max: 51,
     next: 'silver',
+    defaultEmoji: '🥉',
   },
   {
     key: 'silver',
@@ -22,6 +23,7 @@ export const LEVEL_CONFIG = [
     min: 51,
     max: 101,
     next: 'gold',
+    defaultEmoji: '🥈',
   },
   {
     key: 'gold',
@@ -30,6 +32,7 @@ export const LEVEL_CONFIG = [
     min: 101,
     max: 501,
     next: 'diamond',
+    defaultEmoji: '🥇',
   },
   {
     key: 'diamond',
@@ -38,6 +41,7 @@ export const LEVEL_CONFIG = [
     min: 501,
     max: 1001,
     next: 'vip',
+    defaultEmoji: '💎',
   },
   {
     key: 'vip',
@@ -46,6 +50,7 @@ export const LEVEL_CONFIG = [
     min: 1001,
     max: null,
     next: null,
+    defaultEmoji: '👑',
   },
 ];
 

@@ -27,12 +27,22 @@ const settingsSchema = new mongoose.Schema(
       default: 15000,
       min: 1,
     },
+    levelBadges: {
+      type: Map,
+      of: String,
+      default: {},
+    },
   },
   {
     timestamps: true,
     toJSON: {
       transform: (doc, ret) => {
         ret.id = ret._id;
+        if (ret.levelBadges instanceof Map) {
+          ret.levelBadges = Object.fromEntries(ret.levelBadges);
+        } else if (!ret.levelBadges) {
+          ret.levelBadges = {};
+        }
         delete ret._id;
         delete ret.__v;
         return ret;
