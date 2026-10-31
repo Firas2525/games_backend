@@ -160,5 +160,8 @@ const productSchema = new mongoose.Schema(
 
 // Unique compound index: One product per external ID and source
 productSchema.index({ source: 1, externalId: 1 }, { unique: true });
+productSchema.index({ subCategoryId: 1, isAvailable: 1, isVisible: 1 });
+productSchema.index({ mainCategory: 1, isAvailable: 1, isVisible: 1 });
+productSchema.index({ category: 1, isAvailable: 1, isVisible: 1 });
 
 export const Product = mongoose.model('Product', productSchema);

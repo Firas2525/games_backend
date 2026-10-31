@@ -52,4 +52,7 @@ const subCategorySchema = new mongoose.Schema(
   }
 );
 
+subCategorySchema.index({ isVisible: 1, parentId: 1, mainCategory: 1, sortOrder: 1 });
+subCategorySchema.index({ parentId: 1, isVisible: 1 });
+
 export const SubCategory = mongoose.model('SubCategory', subCategorySchema);

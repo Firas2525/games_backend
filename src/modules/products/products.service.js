@@ -10,6 +10,7 @@ import { seedLegacyOverrides } from '../../scripts/seedLegacyOverrides.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { getSettings } from '../settings/settings.service.js';
+import { serverCache } from '../../utils/memoryCache.js';
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -702,8 +703,12 @@ export const buildCurrencyProductFilter = (currencyStr) => {
   return syriaCardExclude;
 };
 
-// 6.0 Get all categories with product counts (filtered by user currency)
+// 6.0 Get all categories with product counts (filtered by user currency & cached in memory)
 export const getAllCategories = async (userCurrency = null) => {
+  const cacheKey = `categories_${userCurrency || 'all'}`;
+  const cached = serverCache.get(cacheKey);
+  if (cached) return cached;
+
   await ensureDefaultCategories();
   const categories = await Category.find({ isVisible: true }).sort({ sortOrder: 1, createdAt: 1 });
 
@@ -728,7 +733,7 @@ export const getAllCategories = async (userCurrency = null) => {
     countMap[pc._id] = pc.count;
   }
 
-  return categories.map((cat) => ({
+  const result = categories.map((cat) => ({
     id: cat._id.toString(),
     key: cat.key,
     title: cat.title,
@@ -741,6 +746,9 @@ export const getAllCategories = async (userCurrency = null) => {
     profitPercentage: cat.profitPercentage !== undefined && cat.profitPercentage !== null ? cat.profitPercentage : null,
     productCount: countMap[cat.key] || 0,
   }));
+
+  serverCache.set(cacheKey, result, 60);
+  return result;
 };
 
 // 6.01 Admin: Create new main category
@@ -777,6 +785,7 @@ export const createCategory = async (data) => {
     isVisible: true,
   });
 
+  serverCache.clearAll();
   return category;
 };
 
@@ -803,6 +812,7 @@ export const updateCategory = async (id, data) => {
   }
 
   await category.save();
+  serverCache.clearAll();
   return category;
 };
 
@@ -823,6 +833,7 @@ export const deleteCategory = async (id) => {
   );
 
   await category.deleteOne();
+  serverCache.clearAll();
   return { message: 'تم حذف القسم بنجاح وإعادة تعيين المنتجات التابعة له', id };
 };
 
@@ -1096,23 +1107,18 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
   }
 };
 
-// 6.3 Sub-Categories Management (Groups / Folders within a Main Category)
+// 6.3 Sub-Categories Management (Groups / Folders within a Main Category - High-Speed Cached)
 export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined) => {
-  // Auto-materialize unassigned products into real SubCategories
-  if (!parentId || parentId === 'all' || parentId === 'root' || parentId === 'null') {
-    try {
-      await materializeAllSubCategories(mainCategory);
-    } catch (err) {
-      console.error('Error auto-syncing subcategories:', err);
-    }
-  }
+  const cacheKey = `subcats_${mainCategory || 'all'}_${parentId || 'root'}_${userCurrency || 'all'}`;
+  const cached = serverCache.get(cacheKey);
+  if (cached) return cached;
 
   const filter = { isVisible: true };
-  if (mainCategory && mainCategory !== 'all') {
-    filter.mainCategory = mainCategory;
-  }
   if (parentId === 'root' || parentId === 'null' || !parentId) {
     filter.parentId = null;
+    if (mainCategory && mainCategory !== 'all') {
+      filter.mainCategory = mainCategory;
+    }
   } else if (parentId && parentId !== 'all') {
     if (mongoose.Types.ObjectId.isValid(parentId)) {
       filter.parentId = new mongoose.Types.ObjectId(parentId);
@@ -1179,8 +1185,8 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     };
   });
 
-  // If top level query without specific parent, also check legacy distinct categories
-  if (!parentId || parentId === 'all') {
+  // Only run heavy aggregate fallback if NO subcategories exist in DB
+  if ((!parentId || parentId === 'all') && result.length === 0) {
     const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
     const productQuery = {
       isVisible: true,
@@ -1224,6 +1230,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     }
   }
 
+  serverCache.set(cacheKey, result, 60);
   return result;
 };
 
@@ -1272,6 +1279,8 @@ export const createSubCategory = async (data) => {
       }
     );
   }
+
+  serverCache.clearAll();
 
   return {
     ...subCategory.toJSON(),
@@ -1344,6 +1353,8 @@ export const updateSubCategory = async (id, data) => {
     );
   }
 
+  serverCache.clearAll();
+
   return subCategory;
 };
 
@@ -1367,6 +1378,7 @@ export const deleteSubCategory = async (id) => {
   }
 
   await subCategory.deleteOne();
+  serverCache.clearAll();
   return { message: 'تم حذف المجلد بنجاح', id };
 };
 
@@ -1402,11 +1414,17 @@ export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCate
     { $set: updateFields }
   );
 
+  serverCache.clearAll();
+
   return { modifiedCount: result.modifiedCount };
 };
 
-// 7. User: Get visible products grouped by Category (All active products visible by default)
+// 7. User: Get visible products grouped by Category (All active products visible by default - Cached)
 export const getUserProducts = async (query = {}, userCurrency = null) => {
+  const cacheKey = `user_prods_${JSON.stringify(query)}_${userCurrency || 'all'}`;
+  const cached = serverCache.get(cacheKey);
+  if (cached) return cached;
+
   const andClauses = [
     { isAvailable: { $ne: false } },
     { isVisible: { $ne: false } },
@@ -1496,12 +1514,15 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     grouped[p.category].push(p);
   }
 
-  return {
+  const responseData = {
     products: mappedProducts,
     grouped,
     categories: Object.keys(grouped),
     subCategories,
   };
+
+  serverCache.set(cacheKey, responseData, 45);
+  return responseData;
 };
 
 // 8. Get Product Details (Packages & Pricing modeled after legacy site)

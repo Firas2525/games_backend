@@ -43,6 +43,8 @@ const bannerSchema = new mongoose.Schema(
   }
 );
 
+bannerSchema.index({ isActive: 1, placement: 1, categoryKey: 1, order: 1 });
+
 export const Banner = mongoose.model('Banner', bannerSchema);
 
 const bannerImageSchema = new mongoose.Schema(
