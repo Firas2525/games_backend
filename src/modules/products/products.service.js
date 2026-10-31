@@ -410,37 +410,46 @@ export const resolveProductProfitPercentage = (product, globalProfit, catMap = {
 
 // 4. Admin: Get all normalized products with filters
 export const getAdminProducts = async (query = {}) => {
-  const filter = {};
+  const andClauses = [];
 
   if (query.source && query.source !== 'all') {
-    filter.source = query.source;
+    andClauses.push({ source: query.source });
   }
   if (query.category && query.category !== 'all') {
-    filter.category = query.category;
+    andClauses.push({ category: query.category });
   }
   if (query.mainCategory && query.mainCategory !== 'all') {
-    filter.mainCategory = query.mainCategory;
+    andClauses.push({ mainCategory: query.mainCategory });
   }
   if (query.isVisible !== undefined && query.isVisible !== 'all') {
-    filter.isVisible = query.isVisible === 'true';
+    andClauses.push({ isVisible: query.isVisible === 'true' });
   }
   if (query.hasDiscount === 'true' || query.discounted === 'true') {
-    filter.discountPercent = { $gt: 0 };
+    andClauses.push({ discountPercent: { $gt: 0 } });
   }
   if (query.subCategoryId !== undefined && query.subCategoryId !== 'all') {
     if (query.subCategoryId === 'null' || query.subCategoryId === 'none' || query.subCategoryId === 'root' || !query.subCategoryId) {
-      filter.subCategoryId = null;
+      andClauses.push({
+        $or: [
+          { subCategoryId: null },
+          { subCategoryId: { $exists: false } },
+          { subCategoryId: '' },
+        ],
+      });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
-      filter.subCategoryId = new mongoose.Types.ObjectId(query.subCategoryId);
-      delete filter.mainCategory;
+      andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
     }
   }
   if (query.search) {
-    filter.$or = [
-      { name: { $regex: query.search, $options: 'i' } },
-      { category: { $regex: query.search, $options: 'i' } },
-    ];
+    andClauses.push({
+      $or: [
+        { name: { $regex: query.search, $options: 'i' } },
+        { category: { $regex: query.search, $options: 'i' } },
+      ],
+    });
   }
+
+  const filter = andClauses.length > 0 ? (andClauses.length === 1 ? andClauses[0] : { $and: andClauses }) : {};
 
   const products = await Product.find(filter)
     .select('-rawPayload')
@@ -849,6 +858,7 @@ export const updateProductMainCategory = async (id, dataOrMainCat) => {
   let subCategoryName = typeof dataOrMainCat === 'object' ? (dataOrMainCat.subCategoryName || dataOrMainCat.category) : null;
   let subCategoryImage = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryImage : null;
   let subCategoryId = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryId : null;
+  const clearSubCategory = typeof dataOrMainCat === 'object' ? Boolean(dataOrMainCat.clearSubCategory) : false;
 
   const product = await Product.findById(id);
   if (!product) {
@@ -858,19 +868,33 @@ export const updateProductMainCategory = async (id, dataOrMainCat) => {
   if (mainCategory && mainCategory.trim()) {
     product.mainCategory = mainCategory.trim();
   }
-  if (subCategoryName && subCategoryName.trim()) {
+
+  if (subCategoryId) {
+    const targetSub = await SubCategory.findById(subCategoryId);
+    if (targetSub) {
+      product.subCategoryId = targetSub._id;
+      product.subCategoryName = targetSub.name;
+      product.subCategoryImage = targetSub.imageUrl || '';
+      product.category = targetSub.name;
+      product.mainCategory = targetSub.mainCategory;
+    }
+  } else if (clearSubCategory || subCategoryId === null || subCategoryId === '' || (!subCategoryName && !product.subCategoryId)) {
+    product.subCategoryId = null;
+    product.subCategoryName = '';
+    product.subCategoryImage = '';
+    product.category = 'عام';
+  } else if (subCategoryName && subCategoryName.trim()) {
     product.subCategoryName = subCategoryName.trim();
     product.category = subCategoryName.trim();
   }
+
   if (subCategoryImage !== undefined && subCategoryImage !== null) {
     product.subCategoryImage = subCategoryImage.trim();
-  }
-  if (subCategoryId !== undefined) {
-    product.subCategoryId = subCategoryId || null;
   }
 
   product.isCategoryOverridden = true;
   await product.save();
+  serverCache.clearAll();
   return product;
 };
 
@@ -904,7 +928,9 @@ export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
     if (subCategoryName !== null && subCategoryName !== undefined && subCategoryName.trim()) {
       updateFields.subCategoryName = subCategoryName.trim();
       updateFields.category = subCategoryName.trim();
-    } else if (clearSubCategory) {
+    } else {
+      // Whenever subCategoryId is null/empty/not provided and subCategoryName is empty,
+      // it means the item is placed directly at root level of mainCategory!
       updateFields.subCategoryId = null;
       updateFields.subCategoryName = '';
       updateFields.subCategoryImage = '';
@@ -1277,51 +1303,6 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
     };
   });
-
-  // Only run heavy aggregate fallback if NO subcategories exist in DB
-  if ((!parentId || parentId === 'all') && result.length === 0) {
-    const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
-    const productQuery = {
-      isVisible: true,
-      isAvailable: { $ne: false },
-      source: { $nin: ['syria_card', 'auto1card'] },
-    };
-    if (mainCategory && mainCategory !== 'all') {
-      productQuery.mainCategory = mainCategory;
-    }
-    if (currencyFilter) {
-      productQuery.$and = [currencyFilter];
-    }
-    const distinctProductCats = await Product.aggregate([
-      { $match: productQuery },
-      { $group: { _id: '$category', count: { $sum: 1 }, sampleImage: { $first: '$image' } } },
-      { $sort: { count: -1 } },
-    ]);
-
-    for (const item of distinctProductCats) {
-      const catName = item._id?.trim();
-      if (!catName || catName === 'عام' || catName === 'Uncategorized') continue;
-      if (!existingNames.has(catName.toLowerCase())) {
-        existingNames.add(catName.toLowerCase());
-        result.push({
-          _id: null,
-          id: null,
-          parentId: null,
-          mainCategory: mainCategory || 'games',
-          name: catName,
-          imageUrl: item.sampleImage || '',
-          productCount: item.count,
-          childCount: 0,
-          isEmpty: false,
-          canDelete: false,
-          products: [],
-          startingPrice: 0,
-          currency: '$',
-          isDynamic: true,
-        });
-      }
-    }
-  }
 
   if (!isAdmin) {
     serverCache.set(cacheKey, result, 60);
