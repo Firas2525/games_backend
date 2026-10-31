@@ -191,20 +191,25 @@ export const fetchAuto1Card = async () => {
   }
 };
 
-// 2.2 Deactivate Syria Card & Auto 1 Card products completely
-export const deactivateSyriaCardProducts = async () => {
+// 2.2 Purge Syria Card & Auto 1 Card products completely from MongoDB
+export const purgeSyriaCardProducts = async () => {
   try {
-    const res = await Product.updateMany(
-      { source: { $in: ['syria_card', 'auto1card'] } },
-      { $set: { isVisible: false, isAvailable: false } }
-    );
-    if (res.modifiedCount > 0) {
-      console.log(`✅ [Products] Deactivated & hidden ${res.modifiedCount} Syria Card products.`);
+    const res = await Product.deleteMany({
+      $or: [
+        { source: { $in: ['syria_card', 'auto1card'] } },
+        { sourceName: { $regex: 'سيريا كارد|Syria Card|Auto 1 Card|Auto1Card', $options: 'i' } },
+      ],
+    });
+    if (res.deletedCount > 0) {
+      console.log(`✅ [Products] Permanently deleted ${res.deletedCount} Syria Card / Auto 1 Card products.`);
     }
+    return res.deletedCount;
   } catch (err) {
-    console.error('Error deactivating Syria Card products:', err.message);
+    console.error('Error deleting Syria Card products:', err.message);
+    return 0;
   }
 };
+export const deactivateSyriaCardProducts = purgeSyriaCardProducts;
 
 // 3. Sync from approved providers (Roya USD, Roya SYP, Brand 1 Card) into MongoDB
 export const syncAllProducts = async () => {
@@ -410,7 +415,15 @@ export const resolveProductProfitPercentage = (product, globalProfit, catMap = {
 
 // 4. Admin: Get all normalized products with filters
 export const getAdminProducts = async (query = {}) => {
+  // Purge any residual Syria Card products in background
+  purgeSyriaCardProducts().catch(() => {});
+
   const andClauses = [];
+
+  // Strictly exclude disabled providers (Syria Card / Auto 1 Card)
+  andClauses.push({
+    source: { $nin: ['syria_card', 'auto1card'] },
+  });
 
   if (query.source && query.source !== 'all') {
     andClauses.push({ source: query.source });
@@ -480,8 +493,8 @@ export const getAdminProducts = async (query = {}) => {
     };
   });
 
-  const categories = await Product.distinct('category');
-  const sources = await Product.distinct('sourceName');
+  const categories = await Product.distinct('category', { source: { $nin: ['syria_card', 'auto1card'] } });
+  const sources = await Product.distinct('sourceName', { source: { $nin: ['syria_card', 'auto1card'] } });
 
   return {
     products: mappedProducts,
@@ -494,13 +507,16 @@ export const getAdminProducts = async (query = {}) => {
 
 // 4.1 Live Verified Catalog Statistics
 export const getCatalogStats = async () => {
+  const baseFilter = { source: { $nin: ['syria_card', 'auto1card'] } };
   const [totalProducts, activeProducts, categoryAggregation, sourceAggregation] = await Promise.all([
-    Product.countDocuments(),
-    Product.countDocuments({ isVisible: true }),
+    Product.countDocuments(baseFilter),
+    Product.countDocuments({ ...baseFilter, isVisible: true }),
     Product.aggregate([
+      { $match: baseFilter },
       { $group: { _id: '$mainCategory', count: { $sum: 1 } } },
     ]),
     Product.aggregate([
+      { $match: baseFilter },
       { $group: { _id: '$source', count: { $sum: 1 } } },
     ]),
   ]);
