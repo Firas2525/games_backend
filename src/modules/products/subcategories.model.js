@@ -8,6 +8,12 @@ const subCategorySchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    parentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SubCategory',
+      default: null,
+      index: true,
+    },
     name: {
       type: String,
       required: true,

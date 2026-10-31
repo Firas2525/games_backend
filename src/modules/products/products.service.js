@@ -854,19 +854,39 @@ export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
   let subCategoryName = typeof dataOrMainCat === 'object' ? (dataOrMainCat.subCategoryName || dataOrMainCat.category) : null;
   let subCategoryImage = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryImage : null;
   let subCategoryId = typeof dataOrMainCat === 'object' ? dataOrMainCat.subCategoryId : null;
+  const clearSubCategory = typeof dataOrMainCat === 'object' ? Boolean(dataOrMainCat.clearSubCategory) : false;
 
   if (!Array.isArray(productIds) || productIds.length === 0) {
     throw new ApiError('يجب تحديد عنصر واحد على الأقل لنقله', HTTP_STATUS.BAD_REQUEST);
   }
 
   const updateFields = { isCategoryOverridden: true };
-  if (mainCategory && mainCategory.trim()) updateFields.mainCategory = mainCategory.trim();
-  if (subCategoryName && subCategoryName.trim()) {
-    updateFields.subCategoryName = subCategoryName.trim();
-    updateFields.category = subCategoryName.trim();
+
+  if (subCategoryId) {
+    const targetSub = await SubCategory.findById(subCategoryId);
+    if (targetSub) {
+      updateFields.subCategoryId = targetSub._id;
+      updateFields.subCategoryName = targetSub.name;
+      updateFields.subCategoryImage = targetSub.imageUrl || '';
+      updateFields.category = targetSub.name;
+      updateFields.mainCategory = targetSub.mainCategory;
+    }
+  } else {
+    if (mainCategory && mainCategory.trim()) {
+      updateFields.mainCategory = mainCategory.trim();
+    }
+    if (subCategoryName !== null && subCategoryName !== undefined && subCategoryName.trim()) {
+      updateFields.subCategoryName = subCategoryName.trim();
+      updateFields.category = subCategoryName.trim();
+    } else if (clearSubCategory) {
+      updateFields.subCategoryId = null;
+      updateFields.subCategoryName = '';
+      updateFields.subCategoryImage = '';
+    }
+    if (subCategoryImage !== undefined && subCategoryImage !== null) {
+      updateFields.subCategoryImage = subCategoryImage.trim();
+    }
   }
-  if (subCategoryImage !== undefined && subCategoryImage !== null) updateFields.subCategoryImage = subCategoryImage.trim();
-  if (subCategoryId !== undefined) updateFields.subCategoryId = subCategoryId || null;
 
   const result = await Product.updateMany(
     { _id: { $in: productIds } },
@@ -897,13 +917,28 @@ export const updateCategoryGroup = async (categoryName, mainCategory) => {
   };
 };
 
-// 6.3 Sub-Categories Management (Groups within a Main Category)
-export const getSubCategories = async (mainCategory, userCurrency = null) => {
+// 6.3 Sub-Categories Management (Groups / Folders within a Main Category)
+export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined) => {
   const filter = { isVisible: true };
   if (mainCategory && mainCategory !== 'all') {
     filter.mainCategory = mainCategory;
   }
-  const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: -1 }).lean();
+  if (parentId === 'root' || parentId === 'null') {
+    filter.parentId = null;
+  } else if (parentId && parentId !== 'all') {
+    filter.parentId = parentId;
+  }
+
+  const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: 1 }).lean();
+  const allSubCategories = await SubCategory.find({ isVisible: true }).select('_id parentId mainCategory').lean();
+
+  const childCountMap = {};
+  for (const sc of allSubCategories) {
+    if (sc.parentId) {
+      const pIdStr = sc.parentId.toString();
+      childCountMap[pIdStr] = (childCountMap[pIdStr] || 0) + 1;
+    }
+  }
 
   const subCategoryIds = subCategories.map((s) => s._id);
   const productMatch = {
@@ -929,58 +964,71 @@ export const getSubCategories = async (mainCategory, userCurrency = null) => {
   }
 
   const result = subCategories.map((sc) => {
-    const scProducts = productsBySubId[sc._id.toString()] || [];
+    const sIdStr = sc._id.toString();
+    const scProducts = productsBySubId[sIdStr] || [];
     const validPrices = scProducts
       .map((p) => (p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price && p.price > 0 ? p.price : (p.originalPrice || 0))))
       .filter((pr) => pr > 0);
     const startingPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
+    const childCount = childCountMap[sIdStr] || 0;
+    const productCount = scProducts.length;
 
     return {
       ...sc,
-      id: sc._id,
-      productCount: scProducts.length,
+      id: sIdStr,
+      parentId: sc.parentId ? sc.parentId.toString() : null,
+      productCount,
+      childCount,
+      isEmpty: productCount === 0 && childCount === 0,
+      canDelete: productCount === 0 && childCount === 0,
       products: scProducts,
       startingPrice,
       currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
     };
   });
 
-  // Also include distinct categories from products under this mainCategory if not already in subCategories
-  const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
-  const productQuery = {
-    isVisible: true,
-    isAvailable: { $ne: false },
-    source: { $nin: ['syria_card', 'auto1card'] },
-  };
-  if (mainCategory && mainCategory !== 'all') {
-    productQuery.mainCategory = mainCategory;
-  }
-  if (currencyFilter) {
-    productQuery.$and = [currencyFilter];
-  }
-  const distinctProductCats = await Product.aggregate([
-    { $match: productQuery },
-    { $group: { _id: '$category', count: { $sum: 1 }, sampleImage: { $first: '$image' } } },
-    { $sort: { count: -1 } },
-  ]);
+  // If top level query without specific parent, also check legacy distinct categories
+  if (!parentId || parentId === 'all') {
+    const existingNames = new Set(result.map((r) => r.name?.toLowerCase().trim()));
+    const productQuery = {
+      isVisible: true,
+      isAvailable: { $ne: false },
+      source: { $nin: ['syria_card', 'auto1card'] },
+    };
+    if (mainCategory && mainCategory !== 'all') {
+      productQuery.mainCategory = mainCategory;
+    }
+    if (currencyFilter) {
+      productQuery.$and = [currencyFilter];
+    }
+    const distinctProductCats = await Product.aggregate([
+      { $match: productQuery },
+      { $group: { _id: '$category', count: { $sum: 1 }, sampleImage: { $first: '$image' } } },
+      { $sort: { count: -1 } },
+    ]);
 
-  for (const item of distinctProductCats) {
-    const catName = item._id?.trim();
-    if (!catName || catName === 'عام' || catName === 'Uncategorized') continue;
-    if (!existingNames.has(catName.toLowerCase())) {
-      existingNames.add(catName.toLowerCase());
-      result.push({
-        _id: null,
-        id: null,
-        mainCategory: mainCategory || 'games',
-        name: catName,
-        imageUrl: item.sampleImage || '',
-        productCount: item.count,
-        products: [],
-        startingPrice: 0,
-        currency: '$',
-        isDynamic: true,
-      });
+    for (const item of distinctProductCats) {
+      const catName = item._id?.trim();
+      if (!catName || catName === 'عام' || catName === 'Uncategorized') continue;
+      if (!existingNames.has(catName.toLowerCase())) {
+        existingNames.add(catName.toLowerCase());
+        result.push({
+          _id: null,
+          id: null,
+          parentId: null,
+          mainCategory: mainCategory || 'games',
+          name: catName,
+          imageUrl: item.sampleImage || '',
+          productCount: item.count,
+          childCount: 0,
+          isEmpty: false,
+          canDelete: false,
+          products: [],
+          startingPrice: 0,
+          currency: '$',
+          isDynamic: true,
+        });
+      }
     }
   }
 
@@ -988,16 +1036,30 @@ export const getSubCategories = async (mainCategory, userCurrency = null) => {
 };
 
 export const createSubCategory = async (data) => {
-  let { mainCategory, name, imageUrl, productIds } = data;
+  let { mainCategory, name, imageUrl, parentId, productIds } = data;
   if (!name || !name.trim()) {
-    throw new ApiError('اسم التصنيف الفرعي مطلوب', HTTP_STATUS.BAD_REQUEST);
+    throw new ApiError('اسم المجلد / التصنيف الفرعي مطلوب', HTTP_STATUS.BAD_REQUEST);
   }
+
+  let resolvedParentId = null;
+  if (parentId && parentId !== 'null' && parentId !== 'root') {
+    const parentSub = await SubCategory.findById(parentId);
+    if (!parentSub) {
+      throw new ApiError('المجلد الأب المحدد غير موجود', HTTP_STATUS.NOT_FOUND);
+    }
+    resolvedParentId = parentSub._id;
+    if (!mainCategory || !mainCategory.trim()) {
+      mainCategory = parentSub.mainCategory;
+    }
+  }
+
   if (!mainCategory || !mainCategory.trim()) {
     throw new ApiError('القسم الرئيسي مطلوب', HTTP_STATUS.BAD_REQUEST);
   }
 
   const subCategory = await SubCategory.create({
     mainCategory: mainCategory.trim(),
+    parentId: resolvedParentId,
     name: name.trim(),
     imageUrl: imageUrl?.trim() || '',
     isVisible: true,
@@ -1008,30 +1070,54 @@ export const createSubCategory = async (data) => {
       { _id: { $in: productIds } },
       {
         $set: {
-          mainCategory: mainCategory.trim(),
+          mainCategory: subCategory.mainCategory,
           subCategoryId: subCategory._id,
           subCategoryName: subCategory.name,
           subCategoryImage: subCategory.imageUrl,
+          category: subCategory.name,
           isCategoryOverridden: true,
         },
       }
     );
   }
 
-  return subCategory;
+  return {
+    ...subCategory.toJSON(),
+    id: subCategory._id.toString(),
+    parentId: resolvedParentId ? resolvedParentId.toString() : null,
+    productCount: Array.isArray(productIds) ? productIds.length : 0,
+    childCount: 0,
+    isEmpty: !Array.isArray(productIds) || productIds.length === 0,
+    canDelete: !Array.isArray(productIds) || productIds.length === 0,
+  };
 };
 
 export const updateSubCategory = async (id, data) => {
   const subCategory = await SubCategory.findById(id);
   if (!subCategory) {
-    throw new ApiError('التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
+    throw new ApiError('المجلد / التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  const { name, imageUrl, mainCategory, productIds, isVisible } = data;
+  const { name, imageUrl, mainCategory, parentId, productIds, isVisible } = data;
   if (name !== undefined) subCategory.name = name.trim();
   if (imageUrl !== undefined) subCategory.imageUrl = imageUrl.trim();
   if (mainCategory !== undefined) subCategory.mainCategory = mainCategory.trim();
   if (isVisible !== undefined) subCategory.isVisible = isVisible;
+  if (parentId !== undefined) {
+    if (parentId && parentId !== 'null' && parentId !== 'root') {
+      if (parentId.toString() === id.toString()) {
+        throw new ApiError('لا يمكن تعيين المجلد كأب لنفسه', HTTP_STATUS.BAD_REQUEST);
+      }
+      const parentSub = await SubCategory.findById(parentId);
+      if (parentSub) {
+        subCategory.parentId = parentSub._id;
+        subCategory.mainCategory = parentSub.mainCategory;
+      }
+    } else {
+      subCategory.parentId = null;
+    }
+  }
+
   await subCategory.save();
 
   await Product.updateMany(
@@ -1040,7 +1126,8 @@ export const updateSubCategory = async (id, data) => {
       $set: {
         subCategoryName: subCategory.name,
         subCategoryImage: subCategory.imageUrl,
-        ...(mainCategory ? { mainCategory: subCategory.mainCategory } : {}),
+        category: subCategory.name,
+        mainCategory: subCategory.mainCategory,
       },
     }
   );
@@ -1058,6 +1145,7 @@ export const updateSubCategory = async (id, data) => {
           subCategoryId: subCategory._id,
           subCategoryName: subCategory.name,
           subCategoryImage: subCategory.imageUrl,
+          category: subCategory.name,
           isCategoryOverridden: true,
         },
       }
@@ -1070,16 +1158,24 @@ export const updateSubCategory = async (id, data) => {
 export const deleteSubCategory = async (id) => {
   const subCategory = await SubCategory.findById(id);
   if (!subCategory) {
-    throw new ApiError('التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
+    throw new ApiError('المجلد / التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  await Product.updateMany(
-    { subCategoryId: subCategory._id },
-    { $set: { subCategoryId: null, subCategoryName: '', subCategoryImage: '' } }
-  );
+  const productCount = await Product.countDocuments({ subCategoryId: subCategory._id });
+  const childCount = await SubCategory.countDocuments({ parentId: subCategory._id });
+
+  if (productCount > 0 || childCount > 0) {
+    const parts = [];
+    if (productCount > 0) parts.push(`${productCount} عنصر`);
+    if (childCount > 0) parts.push(`${childCount} مجلد فرعي`);
+    throw new ApiError(
+      `لا يمكن حذف هذا المجلد لأنه يحتوي على (${parts.join(' و ')}). يرجى نقل العناصر أولاً لتفريغه قبل الحذف.`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
 
   await subCategory.deleteOne();
-  return { message: 'تم حذف التصنيف الفرعي بنجاح وإلغاء تجميع المنتجات التابعة له', id };
+  return { message: 'تم حذف المجلد بنجاح', id };
 };
 
 export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCategoryName, subCategoryImage, mainCategory }) => {
