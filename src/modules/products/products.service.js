@@ -747,7 +747,9 @@ export const getAllCategories = async (userCurrency = null) => {
     productCount: countMap[cat.key] || 0,
   }));
 
-  serverCache.set(cacheKey, result, 60);
+  if (!isAdmin) {
+    serverCache.set(cacheKey, result, 60);
+  }
   return result;
 };
 
@@ -902,6 +904,7 @@ export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
       updateFields.subCategoryId = null;
       updateFields.subCategoryName = '';
       updateFields.subCategoryImage = '';
+      updateFields.category = 'عام';
     }
     if (subCategoryImage !== undefined && subCategoryImage !== null) {
       updateFields.subCategoryImage = subCategoryImage.trim();
@@ -912,6 +915,8 @@ export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
     { _id: { $in: productIds } },
     { $set: updateFields }
   );
+
+  serverCache.clearAll();
 
   return {
     modifiedCount: result.modifiedCount,
@@ -1108,10 +1113,12 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
 };
 
 // 6.3 Sub-Categories Management (Groups / Folders within a Main Category - High-Speed Cached)
-export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined) => {
+export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined, isAdmin = false) => {
   const cacheKey = `subcats_${mainCategory || 'all'}_${parentId || 'root'}_${userCurrency || 'all'}`;
-  const cached = serverCache.get(cacheKey);
-  if (cached) return cached;
+  if (!isAdmin) {
+    const cached = serverCache.get(cacheKey);
+    if (cached) return cached;
+  }
 
   const filter = { isVisible: true };
   if (parentId === 'root' || parentId === 'null' || !parentId) {
@@ -1128,37 +1135,110 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   }
 
   const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: 1 }).lean();
-  const allSubCategories = await SubCategory.find({ isVisible: true }).select('_id parentId mainCategory').lean();
+  const allSubCategories = await SubCategory.find({ isVisible: true }).select('_id parentId mainCategory name').lean();
 
+  // 1. Build parent/child relationship map
   const childCountMap = {};
+  const childrenMap = {};
   for (const sc of allSubCategories) {
     if (sc.parentId) {
       const pIdStr = sc.parentId.toString();
       childCountMap[pIdStr] = (childCountMap[pIdStr] || 0) + 1;
+      if (!childrenMap[pIdStr]) childrenMap[pIdStr] = [];
+      childrenMap[pIdStr].push(sc._id.toString());
     }
   }
 
-  const subCategoryIds = subCategories.map((s) => s._id);
-  const productMatch = {
-    subCategoryId: { $in: subCategoryIds },
-    isAvailable: { $ne: false },
-    isVisible: { $ne: false },
+  // Helper to gather all descendant IDs (subtrees)
+  const getAllDescendantIds = (subIdStr) => {
+    const descendants = [];
+    const queue = [subIdStr];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const children = childrenMap[current] || [];
+      for (const ch of children) {
+        descendants.push(ch);
+        queue.push(ch);
+      }
+    }
+    return descendants;
   };
 
-  const currencyFilter = buildCurrencyProductFilter(userCurrency);
-  if (currencyFilter) {
-    productMatch.$and = [currencyFilter];
+  // 2. Prepare comprehensive target IDs (ObjectId + String) and Name mappings
+  const allSubCatIds = [];
+  const subCategoryNameMap = {};
+  for (const s of subCategories) {
+    allSubCatIds.push(s._id);
+    allSubCatIds.push(s._id.toString());
+    if (s.name) {
+      subCategoryNameMap[s.name.trim().toLowerCase()] = s._id.toString();
+    }
+  }
+
+  // Also include all descendant subcategory IDs to count products inside children
+  for (const sc of allSubCategories) {
+    allSubCatIds.push(sc._id);
+    allSubCatIds.push(sc._id.toString());
+    if (sc.name) {
+      subCategoryNameMap[sc.name.trim().toLowerCase()] = sc._id.toString();
+    }
+  }
+
+  // 3. Match Products
+  const subNames = subCategories.map((s) => s.name?.trim()).filter(Boolean);
+  const matchClauses = [
+    { subCategoryId: { $in: allSubCatIds } },
+  ];
+  if (subNames.length > 0) {
+    const nameClause = {
+      $or: [
+        { subCategoryId: null },
+        { subCategoryId: { $exists: false } },
+      ],
+      $or: [
+        { subCategoryName: { $in: subNames } },
+        { category: { $in: subNames } },
+      ],
+    };
+    if (mainCategory && mainCategory !== 'all') {
+      nameClause.mainCategory = mainCategory;
+    }
+    matchClauses.push(nameClause);
+  }
+
+  const productMatch = { $or: matchClauses };
+  if (mainCategory && mainCategory !== 'all') {
+    productMatch.mainCategory = mainCategory;
+  }
+
+  // For regular users, only count visible, available, and currency-matched products.
+  // For Admins, count all products accurately so the folder counter matches the admin folder view.
+  if (!isAdmin) {
+    productMatch.isAvailable = { $ne: false };
+    productMatch.isVisible = { $ne: false };
+    const currencyFilter = buildCurrencyProductFilter(userCurrency);
+    if (currencyFilter) {
+      productMatch.$and = [currencyFilter];
+    }
   }
 
   const products = await Product.find(productMatch).select(
-    'id _id name image price originalPrice currency isAvailable isVisible subCategoryId subCategoryName source'
+    'id _id name image price sellingPrice originalPrice currency isAvailable isVisible subCategoryId subCategoryName category source'
   ).lean();
 
   const productsBySubId = {};
   for (const p of products) {
-    const sId = p.subCategoryId?.toString();
-    if (!productsBySubId[sId]) productsBySubId[sId] = [];
-    productsBySubId[sId].push(p);
+    let sId = p.subCategoryId?.toString();
+    if (!sId && p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
+      sId = subCategoryNameMap[p.subCategoryName.trim().toLowerCase()];
+    }
+    if (!sId && p.category && subCategoryNameMap[p.category.trim().toLowerCase()]) {
+      sId = subCategoryNameMap[p.category.trim().toLowerCase()];
+    }
+    if (sId) {
+      if (!productsBySubId[sId]) productsBySubId[sId] = [];
+      productsBySubId[sId].push(p);
+    }
   }
 
   const result = subCategories.map((sc) => {
@@ -1169,16 +1249,25 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       .filter((pr) => pr > 0);
     const startingPrice = validPrices.length > 0 ? Math.min(...validPrices) : 0;
     const childCount = childCountMap[sIdStr] || 0;
-    const productCount = scProducts.length;
+    const directCount = scProducts.length;
+
+    // Calculate total products including all child folders
+    const descendantIds = getAllDescendantIds(sIdStr);
+    let totalProductCount = directCount;
+    for (const descId of descendantIds) {
+      totalProductCount += (productsBySubId[descId]?.length || 0);
+    }
 
     return {
       ...sc,
       id: sIdStr,
       parentId: sc.parentId ? sc.parentId.toString() : null,
-      productCount,
+      productCount: directCount,
+      directCount,
+      totalProductCount,
       childCount,
-      isEmpty: productCount === 0 && childCount === 0,
-      canDelete: productCount === 0 && childCount === 0,
+      isEmpty: directCount === 0 && childCount === 0,
+      canDelete: directCount === 0 && childCount === 0,
       products: scProducts,
       startingPrice,
       currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
@@ -1230,7 +1319,9 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     }
   }
 
-  serverCache.set(cacheKey, result, 60);
+  if (!isAdmin) {
+    serverCache.set(cacheKey, result, 60);
+  }
   return result;
 };
 

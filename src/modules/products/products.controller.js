@@ -97,10 +97,12 @@ export const bulkUpdateCategory = asyncHandler(async (req, res) => {
 // Sub-Category handlers
 export const getSubCategoriesList = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
+  const isAdmin = req.user?.role === 'admin' || req.query.admin === 'true';
   const result = await productsService.getSubCategories(
     req.query.mainCategory,
     userCurrency,
-    req.query.parentId
+    req.query.parentId,
+    isAdmin
   );
   return ApiResponse.success(res, result, 'Subcategories fetched successfully');
 });
