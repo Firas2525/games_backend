@@ -98,6 +98,27 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verificationStatus: {
+      type: String,
+      enum: ['unverified', 'pending', 'verified', 'rejected'],
+      default: 'unverified',
+    },
+    verificationDocumentUrl: {
+      type: String,
+      default: '',
+    },
+    verificationRejectionReason: {
+      type: String,
+      default: '',
+    },
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
     twoFactorSecret: {
       type: String,
       default: '',
@@ -116,6 +137,10 @@ const userSchema = new mongoose.Schema(
         ret.id = ret._id;
         ret.userCode = ret.userCode || (ret._id ? ret._id.toString().slice(-6) : '');
         ret.twoFactorEnabled = Boolean(ret.twoFactorEnabled);
+        ret.isVerified = Boolean(ret.isVerified);
+        ret.verificationStatus = ret.verificationStatus || (ret.isVerified ? 'verified' : 'unverified');
+        ret.verificationRejectionReason = ret.verificationRejectionReason || '';
+        ret.verificationDocumentUrl = ret.verificationDocumentUrl || '';
         const levelData = calculateLevelInfo(ret.totalSpent || 0, ret.manualLevel || 'auto');
         Object.assign(ret, levelData);
         delete ret._id;
