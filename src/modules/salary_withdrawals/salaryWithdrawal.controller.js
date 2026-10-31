@@ -326,10 +326,14 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
     // Handle Approval: Credit user wallet with calculated dollars
     if (status === 'approved') {
       if (request.isCredited) {
-        return ApiResponse.error(
+        return ApiResponse.success(
           res,
-          'تم اعتماد هذا الطلب وإيداع الرصيد للمستخدم مسبقاً',
-          HTTP_STATUS.BAD_REQUEST
+          {
+            request,
+            creditedAmount: request.creditedAmount,
+            effectiveCurrency: request.creditedCurrency,
+          },
+          'تم اعتماد هذا الطلب وإيداع الرصيد للمستخدم مسبقاً'
         );
       }
 
@@ -392,7 +396,7 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
         res,
         {
           request,
-          creditedAmount,
+          creditedAmount: creditAmount,
           effectiveCurrency,
           newBalance: newBal,
         },
