@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Product } from './products.model.js';
 import { Category } from './categories.model.js';
 import { SubCategory } from './subcategories.model.js';
@@ -425,11 +426,11 @@ export const getAdminProducts = async (query = {}) => {
   if (query.hasDiscount === 'true' || query.discounted === 'true') {
     filter.discountPercent = { $gt: 0 };
   }
-  if (query.subCategoryId !== undefined) {
-    if (query.subCategoryId === 'null' || query.subCategoryId === 'none' || query.subCategoryId === 'root') {
-      filter.$or = [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }];
-    } else if (query.subCategoryId && query.subCategoryId !== 'all') {
-      filter.subCategoryId = query.subCategoryId;
+  if (query.subCategoryId !== undefined && query.subCategoryId !== 'all') {
+    if (query.subCategoryId === 'null' || query.subCategoryId === 'none' || query.subCategoryId === 'root' || !query.subCategoryId) {
+      filter.subCategoryId = null;
+    } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
+      filter.subCategoryId = new mongoose.Types.ObjectId(query.subCategoryId);
     }
   }
   if (query.search) {
@@ -982,7 +983,7 @@ export const detectProductGroupName = (name = '', category = '') => {
 export const materializeAllSubCategories = async (targetMainCategory = null) => {
   try {
     const unassignedMatch = {
-      $or: [{ subCategoryId: null }, { subCategoryId: { $exists: false } }, { subCategoryId: '' }],
+      subCategoryId: null,
     };
     if (targetMainCategory && targetMainCategory !== 'all') {
       unassignedMatch.mainCategory = targetMainCategory;
@@ -1088,10 +1089,14 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   if (mainCategory && mainCategory !== 'all') {
     filter.mainCategory = mainCategory;
   }
-  if (parentId === 'root' || parentId === 'null') {
+  if (parentId === 'root' || parentId === 'null' || !parentId) {
     filter.parentId = null;
   } else if (parentId && parentId !== 'all') {
-    filter.parentId = parentId;
+    if (mongoose.Types.ObjectId.isValid(parentId)) {
+      filter.parentId = new mongoose.Types.ObjectId(parentId);
+    } else {
+      filter.parentId = null;
+    }
   }
 
   const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: 1 }).lean();
