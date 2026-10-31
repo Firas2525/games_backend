@@ -433,7 +433,6 @@ export const getAdminProducts = async (query = {}) => {
         $or: [
           { subCategoryId: null },
           { subCategoryId: { $exists: false } },
-          { subCategoryId: '' },
         ],
       });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
