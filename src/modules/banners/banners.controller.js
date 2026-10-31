@@ -30,22 +30,57 @@ const DEFAULT_BANNERS = [
 export const getBanners = async (req, res, next) => {
   try {
     const { placement, category } = req.query;
-    const filter = { isActive: true };
 
+    // Handle category / sub-banner placement with automatic fallback
     if (placement === 'category') {
-      filter.$or = [{ placement: 'category' }, { placement: 'all' }];
-      if (category) {
-        filter.$and = [
-          {
-            $or: [
-              { categoryKey: category },
-              { categoryKey: '' },
-              { categoryKey: { $exists: false } },
-            ],
-          },
-        ];
+      const placementFilter = {
+        isActive: true,
+        $or: [{ placement: 'category' }, { placement: 'all' }],
+      };
+
+      if (category && category.trim()) {
+        const catKey = category.trim();
+
+        // 1. Try finding specific sub-banners for this category
+        const specificBanners = await Banner.find({
+          ...placementFilter,
+          categoryKey: catKey,
+        }).sort({ order: 1, createdAt: -1 });
+
+        if (specificBanners.length > 0) {
+          return ApiResponse.success(res, specificBanners, 'تم جلب إعلانات القسم بنجاح');
+        }
+
+        // 2. Fallback: Category has no specific banners -> look for general sub-banner (categoryKey is '' or 'all' or unset)
+        const generalCategoryBanners = await Banner.find({
+          ...placementFilter,
+          $or: [
+            { categoryKey: '' },
+            { categoryKey: 'all' },
+            { categoryKey: null },
+            { categoryKey: { $exists: false } },
+          ],
+        }).sort({ order: 1, createdAt: -1 });
+
+        return ApiResponse.success(res, generalCategoryBanners, 'تم جلب الإعلان الفرعي العام');
       }
-    } else if (placement === 'home') {
+
+      // No specific category queried -> return general category banners
+      const generalBanners = await Banner.find({
+        ...placementFilter,
+        $or: [
+          { categoryKey: '' },
+          { categoryKey: 'all' },
+          { categoryKey: null },
+          { categoryKey: { $exists: false } },
+        ],
+      }).sort({ order: 1, createdAt: -1 });
+
+      return ApiResponse.success(res, generalBanners, 'تم جلب الإعلانات الفرعية العامة');
+    }
+
+    const filter = { isActive: true };
+    if (placement === 'home') {
       filter.$or = [
         { placement: 'home' },
         { placement: 'all' },
