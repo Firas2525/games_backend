@@ -76,7 +76,7 @@ export const cancelCustomOrder = asyncHandler(async (req, res) => {
 
 export const testAdminNotification = asyncHandler(async (req, res) => {
   const result = await sendAdminNotification({
-    title: 'تجربة إشعارات المدير 🔔',
+    title: 'طلب جديد',
     body: 'هذا إشعار تجريبي لاختبار وصول التنبيهات إلى جهاز المدير بنجاح!',
     data: {
       type: 'test_notification',

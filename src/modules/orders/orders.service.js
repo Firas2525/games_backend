@@ -369,7 +369,7 @@ export const executePurchase = async ({
 
   if (shouldNotifyAdmin) {
     sendAdminNotification({
-      title: 'طلب جديد بمزودك الخاص 🔔',
+      title: 'طلب جديد',
       body: `طلب ${finalProductName} #${orderId} - القيمة: ${totalUserPrice} ${effectiveCurrency}`,
       data: {
         orderId: String(orderId),
