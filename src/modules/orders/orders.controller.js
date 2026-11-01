@@ -2,7 +2,7 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import * as ordersService from './orders.service.js';
-import { sendAdminNotification } from '../../config/firebaseAdmin.js';
+import { sendAdminNotification, getFcmDiagnostics } from '../../config/firebaseAdmin.js';
 
 export const purchase = asyncHandler(async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -93,5 +93,10 @@ export const testAdminNotification = asyncHandler(async (req, res) => {
   }
 
   return ApiResponse.success(res, result, 'تم إرسال الإشعار التجريبي بنجاح عبر Firebase');
+});
+
+export const getFcmDiagnosticsHandler = asyncHandler(async (req, res) => {
+  const diagnostics = await getFcmDiagnostics();
+  return ApiResponse.success(res, diagnostics, 'FCM diagnostics retrieved successfully');
 });
 

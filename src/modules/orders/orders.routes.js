@@ -12,11 +12,15 @@ import {
   rejectCustomOrder,
   cancelCustomOrder,
   testAdminNotification,
+  getFcmDiagnosticsHandler,
 } from './orders.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
 
 const router = Router();
+
+// Public/diagnostics endpoint
+router.get('/fcm-diagnostics', getFcmDiagnosticsHandler);
 
 // User purchase and order history (Requires user authentication)
 router.post('/purchase', authenticate, purchase);
