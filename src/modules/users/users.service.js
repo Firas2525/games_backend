@@ -160,7 +160,9 @@ export const deductBalance = async ({ userId, amount, note = '', adminId }) => {
 export const getUserTransactions = async (userId) => {
   return await Transaction.find({ userId, type: { $ne: 'deposit_request' } })
     .populate('adminId', 'name email')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .lean();
 };
 
 export const getAllTransactions = async (query = {}) => {
@@ -169,6 +171,10 @@ export const getAllTransactions = async (query = {}) => {
     await Transaction.deleteMany({ type: 'deposit_request' });
   } catch (_) {}
 
+  const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 50));
+  const page = Math.max(1, parseInt(query.page) || 1);
+  const skip = (page - 1) * limit;
+
   const filter = { type: { $ne: 'deposit_request' } };
   if (query.type && query.type !== 'all') {
     filter.type = query.type;
@@ -176,7 +182,10 @@ export const getAllTransactions = async (query = {}) => {
   return await Transaction.find(filter)
     .populate('userId', 'name email avatar')
     .populate('adminId', 'name email')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
 };
 
 export const updateUserPassword = async (userId, newPassword) => {
