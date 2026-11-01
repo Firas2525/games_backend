@@ -101,3 +101,4 @@ export const deleteCompetitionBanner = async () => {
   );
   return comp;
 };
+

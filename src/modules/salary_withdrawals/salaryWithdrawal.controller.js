@@ -84,13 +84,28 @@ export const submitSalaryWithdrawal = async (req, res) => {
     const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
     const requestId = `SAL-${Date.now().toString().slice(-4)}${randomHex}`;
 
-    let calculatedDollars = 0;
+    let grossDollars = 0;
     if (service.withdrawalType === 'dollars') {
-      calculatedDollars = Number(qty.toFixed(4));
+      grossDollars = Number(qty.toFixed(4));
     } else {
       const cUnit = Math.max(1, Number(service.coinsPerUnit) || 1000);
       const dUnit = Math.max(0.0001, Number(service.dollarsPerUnit) || 1.0);
-      calculatedDollars = Number(((qty / cUnit) * dUnit).toFixed(4));
+      grossDollars = Number(((qty / cUnit) * dUnit).toFixed(4));
+    }
+
+    const feePercent = Math.max(0, Math.min(100, Number(service.feePercentage) || 0));
+    const feeDollars = Number(((grossDollars * feePercent) / 100).toFixed(4));
+    const netDollars = Number(Math.max(0, grossDollars - feeDollars).toFixed(4));
+
+    const settings = await getSettings();
+    const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+    const isUserSyp = req.user?.currency === 'SYP';
+    let creditedAmount = netDollars;
+    let creditedCurrency = 'USD';
+    if (isUserSyp) {
+      creditedAmount = Math.round(netDollars * exchangeRate);
+      creditedCurrency = 'SYP';
     }
 
     const newRequest = await SalaryWithdrawalRequest.create({
@@ -104,11 +119,19 @@ export const submitSalaryWithdrawal = async (req, res) => {
       serviceName: service.name,
       serviceImage: service.imageUrl || '',
       quantity: qty,
+      unitName: service.unitName || (service.withdrawalType === 'coins' ? 'كوينز' : 'دولار'),
       adminReceiverId: service.adminReceiverId || '',
       withdrawalType: service.withdrawalType || 'coins',
       coinsPerUnit: service.coinsPerUnit || 1000,
       dollarsPerUnit: service.dollarsPerUnit || 1.0,
-      calculatedDollars,
+      feePercentage: feePercent,
+      grossDollars,
+      feeDollars,
+      netDollars,
+      exchangeRate,
+      calculatedDollars: netDollars,
+      creditedAmount,
+      creditedCurrency,
       fieldsData: submittedFields,
       status: 'pending',
     });
@@ -169,6 +192,7 @@ export const createSalaryService = async (req, res) => {
       withdrawalType,
       coinsPerUnit,
       dollarsPerUnit,
+      feePercentage,
       isActive,
       sortOrder,
     } = req.body;
@@ -182,6 +206,8 @@ export const createSalaryService = async (req, res) => {
       : [];
 
     const isCoins = (withdrawalType || 'coins') === 'coins';
+    const finalUnitName = unitName && unitName.trim() ? unitName.trim() : (isCoins ? 'كوينز' : 'دولار');
+    const finalFee = Math.max(0, Math.min(100, Number(feePercentage) || 0));
 
     const newService = await SalaryService.create({
       name: name.trim(),
@@ -190,11 +216,12 @@ export const createSalaryService = async (req, res) => {
       requiredFields: cleanedFields,
       minQuantity: minQuantity !== undefined ? Number(minQuantity) : 1,
       maxQuantity: maxQuantity !== undefined ? Number(maxQuantity) : 10000,
-      unitName: unitName ? unitName.trim() : (isCoins ? 'كوينز' : 'دولار'),
+      unitName: finalUnitName,
       adminReceiverId: adminReceiverId ? String(adminReceiverId).trim() : '',
       withdrawalType: isCoins ? 'coins' : 'dollars',
       coinsPerUnit: Math.max(1, Number(coinsPerUnit) || 1000),
       dollarsPerUnit: Math.max(0.0001, Number(dollarsPerUnit) || 1.0),
+      feePercentage: finalFee,
       isActive: isActive !== undefined ? Boolean(isActive) : true,
       sortOrder: sortOrder !== undefined ? Number(sortOrder) : 0,
     });
@@ -223,6 +250,7 @@ export const updateSalaryService = async (req, res) => {
       withdrawalType,
       coinsPerUnit,
       dollarsPerUnit,
+      feePercentage,
       isActive,
       sortOrder,
     } = req.body;
@@ -245,6 +273,7 @@ export const updateSalaryService = async (req, res) => {
     if (withdrawalType !== undefined) service.withdrawalType = withdrawalType === 'dollars' ? 'dollars' : 'coins';
     if (coinsPerUnit !== undefined) service.coinsPerUnit = Math.max(1, Number(coinsPerUnit) || 1000);
     if (dollarsPerUnit !== undefined) service.dollarsPerUnit = Math.max(0.0001, Number(dollarsPerUnit) || 1.0);
+    if (feePercentage !== undefined) service.feePercentage = Math.max(0, Math.min(100, Number(feePercentage) || 0));
     if (isActive !== undefined) service.isActive = Boolean(isActive);
     if (sortOrder !== undefined) service.sortOrder = Number(sortOrder);
 
@@ -345,15 +374,17 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
       const settings = await getSettings();
       const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
-      // Determine dollars amount: use calculatedDollars, or fallback to quantity
-      let dollarsAmount = Number(request.calculatedDollars || 0);
+      // Determine dollars amount: use netDollars, calculatedDollars, or fallback
+      let dollarsAmount = Number(request.netDollars || request.calculatedDollars || 0);
       if (dollarsAmount <= 0) {
         if (request.withdrawalType === 'dollars') {
           dollarsAmount = Number(request.quantity || 0);
         } else {
           const cUnit = Math.max(1, Number(request.coinsPerUnit) || 1000);
           const dUnit = Math.max(0.0001, Number(request.dollarsPerUnit) || 1.0);
-          dollarsAmount = Number(((request.quantity / cUnit) * dUnit).toFixed(4));
+          const gross = Number(((request.quantity / cUnit) * dUnit).toFixed(4));
+          const fee = (gross * (Number(request.feePercentage) || 0)) / 100;
+          dollarsAmount = Number(Math.max(0, gross - fee).toFixed(4));
         }
       }
 
@@ -370,6 +401,10 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
       user.balance = newBal;
       await user.save();
 
+      const unitLabel = request.unitName || (request.withdrawalType === 'coins' ? 'كوينز' : 'دولار');
+      const feeNote = request.feePercentage > 0 ? ` [خصم عمولة ${request.feePercentage}%]` : '';
+      const sypNote = user.currency === 'SYP' ? ` [سعر الصرف: 1$ = ${exchangeRate} ل.س]` : '';
+
       // Create deposit transaction in user history
       const transaction = await Transaction.create({
         userId: user._id,
@@ -379,7 +414,7 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
         amount: creditAmount,
         previousBalance: prevBal,
         newBalance: newBal,
-        note: `إيداع سحب أرباح تطبيقات (${request.serviceName}) - ${request.quantity} ${request.withdrawalType === 'coins' ? 'كوينز' : 'دولار'} [طلب #${request.requestId}]`,
+        note: `إيداع سحب أرباح تطبيقات (${request.serviceName}) - ${request.quantity} ${unitLabel}${feeNote} = ${creditAmount} ${effectiveCurrency}${sypNote} [طلب #${request.requestId}]`,
       });
 
       request.isCredited = true;

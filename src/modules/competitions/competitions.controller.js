@@ -32,3 +32,4 @@ export const removeCompetitionBanner = async (req, res, next) => {
     next(error);
   }
 };
+

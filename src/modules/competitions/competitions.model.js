@@ -42,3 +42,4 @@ const competitionSchema = new mongoose.Schema(
 );
 
 export const Competition = mongoose.model('Competition', competitionSchema);
+
