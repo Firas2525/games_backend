@@ -1,5 +1,7 @@
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { User } from './users.model.js';
 import * as usersService from './users.service.js';
 
 export const getUsers = asyncHandler(async (req, res) => {
@@ -68,5 +70,15 @@ export const updateLevel = asyncHandler(async (req, res) => {
   const user = await usersService.updateUserLevel(req.params.id, manualLevel);
   return ApiResponse.success(res, user, 'User level updated successfully');
 });
+
+export const updateFcmToken = asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    return ApiResponse.error(res, 'FCM Token is required', HTTP_STATUS.BAD_REQUEST);
+  }
+  await User.findByIdAndUpdate(req.user._id, { fcmToken: String(token).trim() });
+  return ApiResponse.success(res, { token }, 'FCM token updated successfully');
+});
+
 
 

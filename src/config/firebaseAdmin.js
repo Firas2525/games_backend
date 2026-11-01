@@ -2,6 +2,7 @@ import admin from 'firebase-admin';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { User } from '../modules/users/users.model.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,9 +79,58 @@ export const sendAdminNotification = async ({ title, body, data = {} }) => {
       },
     };
 
-    const response = await admin.messaging().send(message);
-    console.log('[FirebaseAdmin] Notification sent successfully to admin_orders topic:', response);
-    return { success: true, messageId: response };
+    let topicResponse = null;
+    let directDeliveryCount = 0;
+
+    // 1. Send to 'admin_orders' topic
+    try {
+      topicResponse = await admin.messaging().send(message);
+      console.log('[FirebaseAdmin] Notification sent successfully to admin_orders topic:', topicResponse);
+    } catch (tErr) {
+      console.error('[FirebaseAdmin] Error sending to admin_orders topic:', tErr.message);
+    }
+
+    // 2. Also send directly to active admin device tokens (instant, zero propagation delay)
+    try {
+      const adminUsers = await User.find({
+        role: 'admin',
+        fcmToken: { $exists: true, $nin: ['', null] },
+      }).select('fcmToken name').lean();
+
+      const tokens = [...new Set(adminUsers.map((u) => u.fcmToken).filter(Boolean))];
+      if (tokens.length > 0) {
+        const multicastMessage = {
+          tokens,
+          notification: {
+            title,
+            body,
+          },
+          data: stringifiedData,
+          android: {
+            priority: 'high',
+            notification: {
+              sound: 'default',
+              channelId: 'admin_notifications',
+              priority: 'max',
+              defaultVibrateTimings: true,
+              defaultSound: true,
+            },
+          },
+        };
+
+        const multiRes = await admin.messaging().sendEachForMulticast(multicastMessage);
+        directDeliveryCount = multiRes.successCount;
+        console.log(`[FirebaseAdmin] Direct token multicast sent to ${tokens.length} admins. Success: ${multiRes.successCount}, Fail: ${multiRes.failureCount}`);
+      }
+    } catch (tokErr) {
+      console.error('[FirebaseAdmin] Error sending direct token multicast:', tokErr.message);
+    }
+
+    return {
+      success: Boolean(topicResponse || directDeliveryCount > 0),
+      topicMessageId: topicResponse,
+      directDeliveryCount,
+    };
   } catch (error) {
     console.error('[FirebaseAdmin] Failed to send push notification:', error.message);
     return { success: false, error: error.message };
@@ -88,3 +138,4 @@ export const sendAdminNotification = async ({ title, body, data = {} }) => {
 };
 
 export default admin;
+

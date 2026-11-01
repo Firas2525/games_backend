@@ -1,6 +1,8 @@
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import * as ordersService from './orders.service.js';
+import { sendAdminNotification } from '../../config/firebaseAdmin.js';
 
 export const purchase = asyncHandler(async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -70,5 +72,26 @@ export const cancelCustomOrder = asyncHandler(async (req, res) => {
     isReject: false,
   });
   return ApiResponse.success(res, result, 'تم إلغاء الطلب واسترجاع المبلغ إلى محفظة المستخدم بنجاح');
+});
+
+export const testAdminNotification = asyncHandler(async (req, res) => {
+  const result = await sendAdminNotification({
+    title: 'تجربة إشعارات المدير 🔔',
+    body: 'هذا إشعار تجريبي لاختبار وصول التنبيهات إلى جهاز المدير بنجاح!',
+    data: {
+      type: 'test_notification',
+      timestamp: String(Date.now()),
+    },
+  });
+
+  if (!result.success) {
+    return ApiResponse.error(
+      res,
+      `فشل إرسال الإشعار: ${result.error || result.reason || 'تأكد من إضافة FIREBASE_SERVICE_ACCOUNT على Render'}`,
+      HTTP_STATUS.INTERNAL_SERVER_ERROR
+    );
+  }
+
+  return ApiResponse.success(res, result, 'تم إرسال الإشعار التجريبي بنجاح عبر Firebase');
 });
 

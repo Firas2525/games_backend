@@ -11,6 +11,7 @@ import {
   completeCustomOrder,
   rejectCustomOrder,
   cancelCustomOrder,
+  testAdminNotification,
 } from './orders.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
@@ -32,6 +33,7 @@ router.get('/admin/custom-orders', authenticate, authorize(ROLES.ADMIN), getCust
 router.post('/admin/custom-orders/:orderId/complete', authenticate, authorize(ROLES.ADMIN), completeCustomOrder);
 router.post('/admin/custom-orders/:orderId/reject', authenticate, authorize(ROLES.ADMIN), rejectCustomOrder);
 router.post('/admin/custom-orders/:orderId/cancel', authenticate, authorize(ROLES.ADMIN), cancelCustomOrder);
+router.post('/admin/test-notification', authenticate, authorize(ROLES.ADMIN), testAdminNotification);
 
 router.post('/:orderId/check-status', authenticate, checkOrderStatus);
 

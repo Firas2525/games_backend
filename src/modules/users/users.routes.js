@@ -11,6 +11,7 @@ import {
   getAllTransactionsHandler,
   changePassword,
   updateLevel,
+  updateFcmToken,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -18,6 +19,9 @@ import { balanceOperationSchema } from './users.validation.js';
 import { ROLES } from '../../constants/roles.js';
 
 const router = Router();
+
+// FCM Token update (For any logged in user/admin)
+router.post('/fcm-token', authenticate, updateFcmToken);
 
 // Endpoints for any logged-in user to see their balance history and financial overview
 router.get('/me/transactions', authenticate, getMyTransactions);

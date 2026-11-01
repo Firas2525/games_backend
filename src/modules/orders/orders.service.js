@@ -359,8 +359,15 @@ export const executePurchase = async ({
     providerResponse: dispatchResult.providerResponse || null,
   });
 
-  // Notify Admin if order is from custom provider (requires manual processing)
-  if (isCustomProvider) {
+  // Notify Admin if order is from custom provider or pending manual processing
+  const shouldNotifyAdmin =
+    isCustomProvider ||
+    initialStatus === 'pending' ||
+    dispatchResult?.status === 'pending' ||
+    dispatchResult?.providerPayload?.isManual === true ||
+    !['roya_usd', 'roya_syp', 'brand1card', 'sw_games'].includes(source);
+
+  if (shouldNotifyAdmin) {
     sendAdminNotification({
       title: 'طلب جديد بمزودك الخاص 🔔',
       body: `طلب ${finalProductName} #${orderId} - القيمة: ${totalUserPrice} ${effectiveCurrency}`,
