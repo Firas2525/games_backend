@@ -36,6 +36,16 @@ const settingsSchema = new mongoose.Schema(
       type: [String],
       default: ['الاسم الثلاثي'],
     },
+    whatsappSupport: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    telegramChannel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   {
     timestamps: true,

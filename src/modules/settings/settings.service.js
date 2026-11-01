@@ -31,6 +31,12 @@ export const updateSettings = async (data = {}) => {
   if (data.exchangeRateUsdToSyp !== undefined) {
     settings.exchangeRateUsdToSyp = Math.max(1, Number(data.exchangeRateUsdToSyp) || 15000);
   }
+  if (data.whatsappSupport !== undefined) {
+    settings.whatsappSupport = String(data.whatsappSupport || '').trim();
+  }
+  if (data.telegramChannel !== undefined) {
+    settings.telegramChannel = String(data.telegramChannel || '').trim();
+  }
   await settings.save();
   return settings;
 };
