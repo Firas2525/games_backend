@@ -227,6 +227,16 @@ export const createDepositRequest = async ({
     throw new ApiError('طريقة الإيداع هذه تتطلب إرفاق صورة إشعار التحويل', HTTP_STATUS.BAD_REQUEST);
   }
 
+  if (method.requiresVerification) {
+    const userDoc = await User.findById(userId);
+    if (!userDoc || !userDoc.isVerified) {
+      throw new ApiError(
+        'طريقة الإيداع هذه مخصصة للحسابات الموثقة فقط. يرجى توثيق حسابك أولاً للاستفادة منها.',
+        HTTP_STATUS.FORBIDDEN
+      );
+    }
+  }
+
   // Check duplicate operation number for same method
   const existingOp = await Deposit.findOne({
     methodKey,

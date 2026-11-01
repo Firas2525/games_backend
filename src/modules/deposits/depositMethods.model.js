@@ -84,6 +84,10 @@ const depositMethodSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    requiresVerification: {
+      type: Boolean,
+      default: false,
+    },
     order: {
       type: Number,
       default: 0,

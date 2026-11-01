@@ -1,7 +1,7 @@
 import { VerificationRequest } from './verification.model.js';
 import { User } from '../users/users.model.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-import { HTTP_STATUS } from '../../constants/httpStatus.js';
+import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
 /**
  * Submit an account verification request (User)
