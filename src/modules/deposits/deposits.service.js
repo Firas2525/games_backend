@@ -19,7 +19,7 @@ const DEFAULT_METHODS = [
     minDeposit: 10000,
     maxDeposit: 100000000,
     instructions: 'قم بالتحويل عبر تطبيق شام كاش إلى المعرف الموضح وأدخل رقم العملية لتأكيد الشحن فوراً.',
-    badge: 'سريع محلياً ⚡',
+    badge: '',
     color: '#3B82F6',
     order: 1,
     isEnabled: true,
@@ -35,7 +35,7 @@ const DEFAULT_METHODS = [
     minDeposit: 1,
     maxDeposit: 10000,
     instructions: 'قم بالتحويل بالدولار عبر تطبيق شام كاش إلى المعرف أعلاه مع كتابة رقم العملية.',
-    badge: 'شام دولار 💵',
+    badge: '',
     color: '#2563EB',
     order: 2,
     isEnabled: true,
@@ -51,7 +51,7 @@ const DEFAULT_METHODS = [
     minDeposit: 10000,
     maxDeposit: 10000000,
     instructions: 'أرسل المبلغ المطلوب عبر كود سيريتل كاش *580# إلى الرقم الموضح، وسجل رقم العملية.',
-    badge: 'الأسرع محلياً ⚡',
+    badge: '',
     color: '#EF4444',
     order: 3,
     isEnabled: true,
@@ -67,7 +67,7 @@ const DEFAULT_METHODS = [
     minDeposit: 1,
     maxDeposit: 20000,
     instructions: 'أرسل المبلغ عبر منصة بينانس إلى Binance Pay ID الموضح وانسخ Order ID أو معرف المعاملة.',
-    badge: 'بينانس فوري 🟡',
+    badge: '',
     color: '#F59E0B',
     order: 4,
     isEnabled: true,
@@ -83,7 +83,7 @@ const DEFAULT_METHODS = [
     minDeposit: 5,
     maxDeposit: 50000,
     instructions: 'أرسل عملة USDT عبر شبكة Tron (TRC-20) حصراً إلى العنوان أعلاه ثم الصق هاش المعاملة (TxID).',
-    badge: 'دولي TRC20 🌐',
+    badge: '',
     color: '#10B981',
     order: 5,
     isEnabled: true,
@@ -99,7 +99,7 @@ const DEFAULT_METHODS = [
     minDeposit: 5,
     maxDeposit: 50000,
     instructions: 'أرسل USDT عبر شبكة BNB Smart Chain (BEP-20) وأدخل معرف العملية TxID.',
-    badge: 'رسوم شبكة منخفضة ⚡',
+    badge: '',
     color: '#14B8A6',
     order: 6,
     isEnabled: true,
@@ -115,7 +115,7 @@ const DEFAULT_METHODS = [
     minDeposit: 1,
     maxDeposit: 10000,
     instructions: 'قم بالتحويل الداخلي عبر منصة كوين إكس إلى CoinEx ID الموضح.',
-    badge: 'تحويل داخلي',
+    badge: '',
     color: '#6366F1',
     order: 7,
     isEnabled: true,
@@ -131,7 +131,7 @@ const DEFAULT_METHODS = [
     minDeposit: 1,
     maxDeposit: 10000,
     instructions: 'قم بالتحويل عبر محفظة كازا إلى المعرف الموضح.',
-    badge: 'كازا فوري',
+    badge: '',
     color: '#8B5CF6',
     order: 8,
     isEnabled: true,
@@ -147,7 +147,7 @@ const DEFAULT_METHODS = [
     minDeposit: 50000,
     maxDeposit: 50000000,
     instructions: 'أرسل الحوالة عبر أقرب فرع للهرم أو الفؤاد باسم المستلم المعتمد ثم أرفق رقم الإشعار.',
-    badge: 'حوالات كاش 🏛️',
+    badge: '',
     color: '#EC4899',
     order: 9,
     isEnabled: true,
@@ -162,6 +162,9 @@ export const ensureDefaultMethods = async () => {
   if (count === 0) {
     await DepositMethod.insertMany(DEFAULT_METHODS);
     console.log('✅ Seeded default deposit methods successfully');
+  } else {
+    // Clear any existing badges to keep payment method titles clean
+    await DepositMethod.updateMany({ badge: { $ne: '' } }, { $set: { badge: '' } });
   }
 };
 
