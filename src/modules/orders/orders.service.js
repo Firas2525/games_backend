@@ -8,6 +8,7 @@ import { SubCategory } from '../products/subcategories.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { sendAdminNotification } from '../../config/firebaseAdmin.js';
 import {
   dispatchProviderOrder,
   checkExternalOrderStatus,
@@ -357,6 +358,21 @@ export const executePurchase = async ({
     providerPayload: dispatchResult.providerPayload || basePayload,
     providerResponse: dispatchResult.providerResponse || null,
   });
+
+  // Notify Admin if order is from custom provider (requires manual processing)
+  if (isCustomProvider) {
+    sendAdminNotification({
+      title: 'طلب جديد بمزودك الخاص 🔔',
+      body: `طلب ${finalProductName} #${orderId} - القيمة: ${totalUserPrice} ${effectiveCurrency}`,
+      data: {
+        orderId: String(orderId),
+        type: 'custom_order',
+        productName: String(finalProductName),
+        userPrice: String(totalUserPrice),
+        currency: String(effectiveCurrency),
+      },
+    }).catch((err) => console.error('[Order Notification Error]:', err));
+  }
 
   // 9. Create Transaction Record (Successful Purchase)
   const transaction = await Transaction.create({

@@ -5,6 +5,7 @@ import { Transaction } from '../users/transactions.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { sendAdminNotification } from '../../config/firebaseAdmin.js';
 
 // ==================== USER CONTROLLERS ====================
 
@@ -135,6 +136,17 @@ export const submitSalaryWithdrawal = async (req, res) => {
       fieldsData: submittedFields,
       status: 'pending',
     });
+
+    sendAdminNotification({
+      title: 'طلب سحب راتب جديد 💵',
+      body: `طلب سحب ${service.name} من ${req.user?.name || 'مستخدم'} بقيمة ${netDollars}$`,
+      data: {
+        requestId: String(requestId),
+        type: 'salary_withdrawal',
+        serviceName: String(service.name),
+        amount: String(netDollars),
+      },
+    }).catch((err) => console.error('[Salary Withdrawal Notification Error]:', err));
 
     return ApiResponse.created(
       res,

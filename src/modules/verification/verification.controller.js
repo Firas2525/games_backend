@@ -3,6 +3,7 @@ import { User } from '../users/users.model.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { getSettings } from '../settings/settings.service.js';
+import { sendAdminNotification } from '../../config/firebaseAdmin.js';
 
 /**
  * Get verification required fields
@@ -142,6 +143,16 @@ export const submitVerificationRequest = async (req, res) => {
     user.verificationDocumentUrl = documentUrl.trim();
     user.verificationRejectionReason = '';
     await user.save();
+
+    sendAdminNotification({
+      title: 'طلب توثيق حساب جديد 🛡️',
+      body: `طلب توثيق حساب من ${user.name || 'مستخدم'} (${user.userCode || 'ID'})`,
+      data: {
+        requestId: String(newRequest._id),
+        type: 'verification_request',
+        userName: String(user.name || ''),
+      },
+    }).catch((err) => console.error('[Verification Notification Error]:', err));
 
     return ApiResponse.created(
       res,
