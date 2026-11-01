@@ -2,6 +2,59 @@ import { VerificationRequest } from './verification.model.js';
 import { User } from '../users/users.model.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { getSettings } from '../settings/settings.service.js';
+
+/**
+ * Get verification required fields
+ */
+export const getVerificationFields = async (req, res) => {
+  try {
+    const settings = await getSettings();
+    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
+      ? settings.verificationRequiredFields
+      : ['الاسم الثلاثي'];
+
+    return ApiResponse.success(
+      res,
+      { requiredFields },
+      'Verification required fields retrieved successfully'
+    );
+  } catch (error) {
+    return ApiResponse.error(res, error.message);
+  }
+};
+
+/**
+ * Update verification required fields (Admin)
+ */
+export const updateVerificationFields = async (req, res) => {
+  try {
+    const { fields } = req.body;
+    if (!Array.isArray(fields)) {
+      return ApiResponse.error(
+        res,
+        'يجب إرسال قائمة بالحقول المطلوبة كـ مصفوفة (Array)',
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+
+    const cleanedFields = fields
+      .map((f) => (typeof f === 'string' ? f.trim() : ''))
+      .filter((f) => f.length > 0);
+
+    const settings = await getSettings();
+    settings.verificationRequiredFields = cleanedFields;
+    await settings.save();
+
+    return ApiResponse.success(
+      res,
+      { requiredFields: settings.verificationRequiredFields },
+      'تم تحديث حقول التوثيق المطلوبة بنجاح ⚙️'
+    );
+  } catch (error) {
+    return ApiResponse.error(res, error.message);
+  }
+};
 
 /**
  * Submit an account verification request (User)
@@ -9,7 +62,7 @@ import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 export const submitVerificationRequest = async (req, res) => {
   try {
     const userId = req.user?._id;
-    const { documentUrl, notes } = req.body;
+    let { documentUrl, notes, fieldsData } = req.body;
 
     if (!documentUrl || typeof documentUrl !== 'string' || !documentUrl.trim()) {
       return ApiResponse.error(
@@ -17,6 +70,33 @@ export const submitVerificationRequest = async (req, res) => {
         'يرجى إرفاق صورة وثيقة إثبات الشخصية لتوثيق الحساب',
         HTTP_STATUS.BAD_REQUEST
       );
+    }
+
+    // Parse fieldsData if sent as string
+    if (typeof fieldsData === 'string') {
+      try {
+        fieldsData = JSON.parse(fieldsData);
+      } catch (e) {
+        fieldsData = {};
+      }
+    }
+    fieldsData = fieldsData && typeof fieldsData === 'object' ? fieldsData : {};
+
+    // Validate required fields from system settings
+    const settings = await getSettings();
+    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
+      ? settings.verificationRequiredFields
+      : ['الاسم الثلاثي'];
+
+    for (const fieldName of requiredFields) {
+      const val = fieldsData[fieldName];
+      if (!val || typeof val !== 'string' || !val.trim()) {
+        return ApiResponse.error(
+          res,
+          `يرجى تعبئة الحقل المطلوب: (${fieldName})`,
+          HTTP_STATUS.BAD_REQUEST
+        );
+      }
     }
 
     const user = await User.findById(userId);
@@ -53,6 +133,7 @@ export const submitVerificationRequest = async (req, res) => {
       userPhone: user.phone || '',
       userCode: user.userCode || (user._id ? user._id.toString().slice(-6) : ''),
       documentUrl: documentUrl.trim(),
+      fieldsData,
       notes: notes ? String(notes).trim() : '',
       status: 'pending',
     });
@@ -83,8 +164,15 @@ export const getMyVerificationStatus = async (req, res) => {
       return ApiResponse.error(res, 'المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
     }
 
-    const requests = await VerificationRequest.find({ userId }).sort({ createdAt: -1 });
+    const [requests, settings] = await Promise.all([
+      VerificationRequest.find({ userId }).sort({ createdAt: -1 }),
+      getSettings(),
+    ]);
     const latestRequest = requests.length > 0 ? requests[0] : null;
+
+    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
+      ? settings.verificationRequiredFields
+      : ['الاسم الثلاثي'];
 
     return ApiResponse.success(
       res,
@@ -94,6 +182,7 @@ export const getMyVerificationStatus = async (req, res) => {
         verificationDocumentUrl: user.verificationDocumentUrl || (latestRequest ? latestRequest.documentUrl : ''),
         verificationRejectionReason: user.verificationRejectionReason || (latestRequest?.status === 'rejected' ? latestRequest.rejectionReason : ''),
         verifiedAt: user.verifiedAt || null,
+        requiredFields,
         latestRequest,
         requests,
       },
@@ -126,18 +215,24 @@ export const getAdminVerificationRequests = async (req, res) => {
       ];
     }
 
-    const [requests, allCount, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+    const [requests, allCount, pendingCount, approvedCount, rejectedCount, settings] = await Promise.all([
       VerificationRequest.find(filter).sort({ createdAt: -1 }).lean(),
       VerificationRequest.countDocuments(),
       VerificationRequest.countDocuments({ status: 'pending' }),
       VerificationRequest.countDocuments({ status: 'approved' }),
       VerificationRequest.countDocuments({ status: 'rejected' }),
+      getSettings(),
     ]);
+
+    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
+      ? settings.verificationRequiredFields
+      : ['الاسم الثلاثي'];
 
     return ApiResponse.success(
       res,
       {
         requests,
+        requiredFields,
         counts: {
           all: allCount,
           pending: pendingCount,

@@ -32,6 +32,10 @@ const settingsSchema = new mongoose.Schema(
       of: String,
       default: {},
     },
+    verificationRequiredFields: {
+      type: [String],
+      default: ['الاسم الثلاثي'],
+    },
   },
   {
     timestamps: true,
@@ -42,6 +46,9 @@ const settingsSchema = new mongoose.Schema(
           ret.levelBadges = Object.fromEntries(ret.levelBadges);
         } else if (!ret.levelBadges) {
           ret.levelBadges = {};
+        }
+        if (!ret.verificationRequiredFields || !Array.isArray(ret.verificationRequiredFields)) {
+          ret.verificationRequiredFields = ['الاسم الثلاثي'];
         }
         delete ret._id;
         delete ret.__v;
