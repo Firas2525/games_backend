@@ -12,6 +12,8 @@ import {
   changePassword,
   updateLevel,
   updateFcmToken,
+  getCoinsInfoHandler,
+  redeemCoinsHandler,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -26,6 +28,10 @@ router.post('/fcm-token', authenticate, updateFcmToken);
 // Endpoints for any logged-in user to see their balance history and financial overview
 router.get('/me/transactions', authenticate, getMyTransactions);
 router.get('/me/financial-summary', authenticate, getMyFinancialSummary);
+
+// Coins / Cashback system routes
+router.get('/coins/info', authenticate, getCoinsInfoHandler);
+router.post('/coins/redeem', authenticate, redeemCoinsHandler);
 
 // Admin-only routes
 router.use(authenticate, authorize(ROLES.ADMIN));

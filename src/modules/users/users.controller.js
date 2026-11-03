@@ -80,5 +80,16 @@ export const updateFcmToken = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, { token }, 'FCM token updated successfully');
 });
 
+export const getCoinsInfoHandler = asyncHandler(async (req, res) => {
+  const result = await usersService.getCoinsInfo(req.user._id);
+  return ApiResponse.success(res, result, 'Coins info retrieved successfully');
+});
+
+export const redeemCoinsHandler = asyncHandler(async (req, res) => {
+  const { amountCoins } = req.body;
+  const result = await usersService.redeemCoins(req.user._id, amountCoins);
+  return ApiResponse.success(res, result, result.message);
+});
+
 
 

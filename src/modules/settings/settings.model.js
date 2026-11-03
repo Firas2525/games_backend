@@ -46,6 +46,21 @@ const settingsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    cashbackPercentage: {
+      type: Number,
+      default: 5, // 5% cashback in coins
+      min: 0,
+      max: 100,
+    },
+    coinsPerDollar: {
+      type: Number,
+      default: 100, // 100 coins = $1 USD
+      min: 1,
+    },
+    isCashbackActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
     timestamps: true,

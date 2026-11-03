@@ -60,6 +60,11 @@ const userSchema = new mongoose.Schema(
       default: 0,
       min: [0, 'Balance cannot be negative'],
     },
+    coins: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     totalSpent: {
       type: Number,
       default: 0,
@@ -141,6 +146,7 @@ const userSchema = new mongoose.Schema(
       transform: (doc, ret) => {
         ret.id = ret._id;
         ret.userCode = ret.userCode || (ret._id ? ret._id.toString().slice(-6) : '');
+        ret.coins = Number(ret.coins || 0);
         ret.twoFactorEnabled = Boolean(ret.twoFactorEnabled);
         ret.isVerified = Boolean(ret.isVerified);
         ret.verificationStatus = ret.verificationStatus || (ret.isVerified ? 'verified' : 'unverified');

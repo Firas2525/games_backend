@@ -397,15 +397,45 @@ export const executePurchase = async ({
     note: `شراء: ${finalProductName} (${targetId || 'رقم الحساب'})`,
   });
 
+  // 10. Award Cashback Coins upon successful purchase
+  let coinsAwarded = 0;
+  try {
+    const isCashbackActive = settings.isCashbackActive !== false;
+    const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
+    const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
+    const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+    if (isCashbackActive && cashbackPercentage > 0) {
+      let spentInUsd = totalUserPrice;
+      if (effectiveCurrency === 'ل.س' || effectiveCurrency === 'SYP' || user.currency === 'SYP') {
+        spentInUsd = totalUserPrice / exchangeRate;
+      }
+      const cashbackUsd = spentInUsd * (cashbackPercentage / 100);
+      coinsAwarded = Math.round(cashbackUsd * coinsPerDollar);
+
+      if (coinsAwarded > 0) {
+        user.coins = (user.coins || 0) + coinsAwarded;
+        await user.save();
+
+        order.coinsEarned = coinsAwarded;
+        await order.save();
+      }
+    }
+  } catch (coinErr) {
+    console.error('[Cashback Award Error]:', coinErr);
+  }
+
   return {
     order: enrichOrderWithInvoiceMeta(order),
     transaction: transaction.toJSON(),
     user: {
       id: user._id,
       balance: user.balance,
+      coins: user.coins || 0,
       totalSpent: user.totalSpent,
       totalProfit: user.totalProfit,
     },
+    coinsAwarded,
   };
 };
 
@@ -432,6 +462,9 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   user.balance = newBal;
   user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
   user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
+  if (order.coinsEarned && order.coinsEarned > 0) {
+    user.coins = Math.max(0, (user.coins || 0) - order.coinsEarned);
+  }
   await user.save();
 
   order.status = 'failed';

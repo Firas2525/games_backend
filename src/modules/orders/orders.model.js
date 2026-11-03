@@ -65,6 +65,10 @@ const orderSchema = new mongoose.Schema(
       required: true,
       default: 0,
     },
+    coinsEarned: {
+      type: Number,
+      default: 0,
+    },
     profitPercentage: {
       type: Number,
       default: 0,

@@ -3,6 +3,7 @@ import { User } from './users.model.js';
 import { Transaction } from './transactions.model.js';
 import { Deposit } from '../deposits/deposits.model.js';
 import { Order } from '../orders/orders.model.js';
+import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 
@@ -283,6 +284,109 @@ export const getUserFinancialSummary = async (userId) => {
       pending: pendingCount,
       rejected: rejectedCount,
     },
+  };
+};
+
+export const getCoinsInfo = async (userId) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError('المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  const settings = await getSettings();
+  const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
+  const isCashbackActive = settings.isCashbackActive !== false;
+
+  const userCoins = Number(user.coins || 0);
+  const userCurrency = user.currency === 'SYP' ? 'SYP' : 'USD';
+
+  // Value in USD
+  const equivalentUsd = Number((userCoins / coinsPerDollar).toFixed(2));
+  // Value in SYP
+  const equivalentSyp = Math.round((userCoins / coinsPerDollar) * exchangeRate);
+
+  // The actual credit the user will get in their wallet currency
+  const walletCreditAmount = userCurrency === 'SYP' ? equivalentSyp : equivalentUsd;
+
+  return {
+    coins: userCoins,
+    coinsPerDollar,
+    exchangeRate,
+    cashbackPercentage,
+    isCashbackActive,
+    userCurrency,
+    equivalentUsd,
+    equivalentSyp,
+    walletCreditAmount,
+  };
+};
+
+export const redeemCoins = async (userId, requestedCoins) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError('المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  const userCoins = Number(user.coins || 0);
+  let coinsToRedeem = requestedCoins !== undefined && requestedCoins !== null ? Number(requestedCoins) : userCoins;
+
+  if (isNaN(coinsToRedeem) || coinsToRedeem <= 0) {
+    throw new ApiError('يرجى تحديد عدد كوينز صالح للاستبدال', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  if (coinsToRedeem > userCoins) {
+    throw new ApiError(`رصيدك من الكوينز (${userCoins}) غير كافٍ لاستبدال ${coinsToRedeem} كوينز`, HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const settings = await getSettings();
+  const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+  // Calculate USD value
+  const usdValue = coinsToRedeem / coinsPerDollar;
+
+  const userCurrency = user.currency === 'SYP' ? 'SYP' : 'USD';
+  let creditAmount = 0;
+
+  if (userCurrency === 'SYP') {
+    creditAmount = Math.round(usdValue * exchangeRate);
+  } else {
+    creditAmount = Number(usdValue.toFixed(2));
+  }
+
+  if (creditAmount <= 0) {
+    throw new ApiError('قيمة الكوينز المراد استبدالها ضئيلة جداً', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const prevBalance = Number((user.balance || 0).toFixed(4));
+  const newBalance = Number((prevBalance + creditAmount).toFixed(4));
+
+  user.coins = Math.max(0, userCoins - coinsToRedeem);
+  user.balance = newBalance;
+  await user.save();
+
+  // Create Transaction
+  const transaction = await Transaction.create({
+    userId: user._id,
+    type: 'coins_redeem',
+    currency: userCurrency,
+    amount: creditAmount,
+    previousBalance: prevBalance,
+    newBalance: newBalance,
+    note: `استبدال كوينز كاش باك: ${coinsToRedeem} كوينز -> ${creditAmount} ${userCurrency === 'SYP' ? 'ل.س' : '$'}`,
+  });
+
+  return {
+    success: true,
+    message: `تم استبدال ${coinsToRedeem} كوينز وإضافة ${creditAmount} ${userCurrency === 'SYP' ? 'ل.س' : '$'} إلى رصيدك بنجاح! 🎉`,
+    redeemedCoins: coinsToRedeem,
+    creditAmount,
+    currency: userCurrency,
+    remainingCoins: user.coins,
+    newBalance: user.balance,
+    transaction: transaction.toJSON(),
   };
 };
 
