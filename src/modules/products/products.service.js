@@ -1236,13 +1236,19 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   ];
   if (subNames.length > 0) {
     const nameClause = {
-      $or: [
-        { subCategoryId: null },
-        { subCategoryId: { $exists: false } },
-      ],
-      $or: [
-        { subCategoryName: { $in: subNames } },
-        { category: { $in: subNames } },
+      $and: [
+        {
+          $or: [
+            { subCategoryId: null },
+            { subCategoryId: { $exists: false } },
+          ],
+        },
+        {
+          $or: [
+            { subCategoryName: { $in: subNames } },
+            { category: { $in: subNames } },
+          ],
+        },
       ],
     };
     if (mainCategory && mainCategory !== 'all') {
@@ -1517,6 +1523,27 @@ export const deleteSubCategory = async (id) => {
   return { message: 'تم حذف المجلد بنجاح', id };
 };
 
+export const reorderSubCategories = async (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ApiError('Ù‚Ø§Ø¦Ù…Ø© Ø§Ù„ØªØ±ØªÙŠØ¨ ÙØ§Ø±ØºØ©', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const bulkOps = items
+    .filter((item) => item.id && mongoose.Types.ObjectId.isValid(item.id))
+    .map((item, index) => ({
+      updateOne: {
+        filter: { _id: new mongoose.Types.ObjectId(item.id) },
+        update: { $set: { sortOrder: typeof item.sortOrder === 'number' ? item.sortOrder : index } },
+      },
+    }));
+
+  if (bulkOps.length > 0) {
+    await SubCategory.bulkWrite(bulkOps);
+  }
+
+  serverCache.clearAll();
+  return { success: true, count: bulkOps.length, message: 'ØªÙ… Ø­ÙØ¸ ØªØ±ØªÙŠØ¨ Ø§Ù„Ø£Ù‚Ø³Ø§Ù… Ø§Ù„ÙØ±Ø¹ÙŠØ© Ø¨Ù†Ø¬Ø§Ø­' };
+};
 export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCategoryName, subCategoryImage, mainCategory }) => {
   if (!Array.isArray(productIds) || productIds.length === 0) {
     throw new ApiError('يجب تحديد المنتجات أولاً', HTTP_STATUS.BAD_REQUEST);

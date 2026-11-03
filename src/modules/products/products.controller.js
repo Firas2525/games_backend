@@ -113,6 +113,10 @@ export const addSubCategory = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'تم إنشاء التصنيف الفرعي وتجميع المنتجات بنجاح');
 });
 
+export const reorderSubCategories = asyncHandler(async (req, res) => {
+  const result = await productsService.reorderSubCategories(req.body.items || req.body);
+  return ApiResponse.success(res, result, result.message);
+});
 export const editSubCategory = asyncHandler(async (req, res) => {
   const result = await productsService.updateSubCategory(req.params.id, req.body);
   return ApiResponse.success(res, result, 'تم تحديث بيانات التصنيف الفرعي بنجاح');

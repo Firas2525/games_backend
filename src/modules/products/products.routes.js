@@ -16,6 +16,7 @@ import {
   removeCategory,
   getSubCategoriesList,
   addSubCategory,
+  reorderSubCategories,
   editSubCategory,
   removeSubCategory,
   bulkAssignSubCategory,
@@ -62,6 +63,8 @@ router.delete('/custom/:id', deleteCustom);
 router.post('/categories', addCategory);
 router.patch('/categories/:id', editCategory);
 router.delete('/categories/:id', removeCategory);
+router.patch('/subcategories/reorder', reorderSubCategories);
+router.post('/subcategories/reorder', reorderSubCategories);
 router.post('/subcategories', addSubCategory);
 router.patch('/subcategories/:id', editSubCategory);
 router.delete('/subcategories/:id', removeSubCategory);
