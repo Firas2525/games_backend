@@ -1080,29 +1080,24 @@ export const getProfitReportsAdmin = async (query = {}) => {
     createdAt: { $gte: startDate, $lte: endDate },
   };
 
-  // Convert amounts to normalized USD
-  const projectUsdFields = {
-    userPriceUsd: {
+  // Pure Currency Isolation: Separate USD and SYP without any exchange rate merging
+  const projectFields = {
+    currencyType: {
       $cond: [
-        { $eq: ['$currency', 'SYP'] },
-        { $divide: [{ $ifNull: ['$userPrice', 0] }, exchangeRate] },
-        { $ifNull: ['$userPrice', 0] },
+        {
+          $or: [
+            { $eq: ['$currency', 'SYP'] },
+            { $eq: ['$currency', 'syp'] },
+            { $eq: ['$currency', 'ل.س'] },
+          ],
+        },
+        'SYP',
+        'USD',
       ],
     },
-    costPriceUsd: {
-      $cond: [
-        { $eq: ['$currency', 'SYP'] },
-        { $divide: [{ $ifNull: ['$costPrice', 0] }, exchangeRate] },
-        { $ifNull: ['$costPrice', 0] },
-      ],
-    },
-    profitUsd: {
-      $cond: [
-        { $eq: ['$currency', 'SYP'] },
-        { $divide: [{ $ifNull: ['$profit', 0] }, exchangeRate] },
-        { $ifNull: ['$profit', 0] },
-      ],
-    },
+    userPrice: { $ifNull: ['$userPrice', 0] },
+    costPrice: { $ifNull: ['$costPrice', 0] },
+    profit: { $ifNull: ['$profit', 0] },
     productId: 1,
     productName: 1,
     category: 1,
@@ -1111,17 +1106,17 @@ export const getProfitReportsAdmin = async (query = {}) => {
     currency: 1,
   };
 
-  // 1. Current Period & Previous Period Summary Aggregation
+  // 1. Current Period & Previous Period Summary Aggregation (Grouped strictly by Currency)
   const [currentSummaryAgg, prevSummaryAgg] = await Promise.all([
     Order.aggregate([
       { $match: periodMatch },
-      { $project: projectUsdFields },
+      { $project: projectFields },
       {
         $group: {
-          _id: null,
-          totalRevenueUsd: { $sum: '$userPriceUsd' },
-          totalCostUsd: { $sum: '$costPriceUsd' },
-          totalProfitUsd: { $sum: '$profitUsd' },
+          _id: '$currencyType',
+          totalRevenue: { $sum: '$userPrice' },
+          totalCost: { $sum: '$costPrice' },
+          totalProfit: { $sum: '$profit' },
           ordersCount: { $sum: 1 },
         },
       },
@@ -1134,13 +1129,13 @@ export const getProfitReportsAdmin = async (query = {}) => {
               createdAt: { $gte: prevStartDate, $lte: prevEndDate },
             },
           },
-          { $project: projectUsdFields },
+          { $project: projectFields },
           {
             $group: {
-              _id: null,
-              totalRevenueUsd: { $sum: '$userPriceUsd' },
-              totalCostUsd: { $sum: '$costPriceUsd' },
-              totalProfitUsd: { $sum: '$profitUsd' },
+              _id: '$currencyType',
+              totalRevenue: { $sum: '$userPrice' },
+              totalCost: { $sum: '$costPrice' },
+              totalProfit: { $sum: '$profit' },
               ordersCount: { $sum: 1 },
             },
           },
@@ -1148,90 +1143,156 @@ export const getProfitReportsAdmin = async (query = {}) => {
       : Promise.resolve([]),
   ]);
 
-  const curr = currentSummaryAgg[0] || {
-    totalRevenueUsd: 0,
-    totalCostUsd: 0,
-    totalProfitUsd: 0,
+  const usdCurr = currentSummaryAgg.find((s) => s._id === 'USD') || {
+    totalRevenue: 0,
+    totalCost: 0,
+    totalProfit: 0,
     ordersCount: 0,
   };
-  const prev = prevSummaryAgg[0] || {
-    totalRevenueUsd: 0,
-    totalCostUsd: 0,
-    totalProfitUsd: 0,
+  const sypCurr = currentSummaryAgg.find((s) => s._id === 'SYP') || {
+    totalRevenue: 0,
+    totalCost: 0,
+    totalProfit: 0,
     ordersCount: 0,
   };
 
-  const totalRevenue = Number((curr.totalRevenueUsd || 0).toFixed(2));
-  const totalCost = Number((curr.totalCostUsd || 0).toFixed(2));
-  const totalProfit = Number((curr.totalProfitUsd || 0).toFixed(2));
-  const ordersCount = curr.ordersCount || 0;
+  const usdPrev = prevSummaryAgg.find((s) => s._id === 'USD') || {
+    totalRevenue: 0,
+    totalCost: 0,
+    totalProfit: 0,
+    ordersCount: 0,
+  };
+  const sypPrev = prevSummaryAgg.find((s) => s._id === 'SYP') || {
+    totalRevenue: 0,
+    totalCost: 0,
+    totalProfit: 0,
+    ordersCount: 0,
+  };
 
-  const profitMargin = totalRevenue > 0 ? Number(((totalProfit / totalRevenue) * 100).toFixed(1)) : 0;
-  const avgProfitPerOrder = ordersCount > 0 ? Number((totalProfit / ordersCount).toFixed(2)) : 0;
-
-  // Growth calculation compared to previous period
-  const prevProfit = prev.totalProfitUsd || 0;
-  const profitGrowth =
-    prevProfit > 0
-      ? Number((((totalProfit - prevProfit) / prevProfit) * 100).toFixed(1))
-      : totalProfit > 0
+  // USD Calculations (Pure USD figures)
+  const totalRevenueUsd = Number((usdCurr.totalRevenue || 0).toFixed(2));
+  const totalCostUsd = Number((usdCurr.totalCost || 0).toFixed(2));
+  const totalProfitUsd = Number((usdCurr.totalProfit || 0).toFixed(2));
+  const ordersCountUsd = usdCurr.ordersCount || 0;
+  const profitMarginUsd = totalRevenueUsd > 0 ? Number(((totalProfitUsd / totalRevenueUsd) * 100).toFixed(1)) : 0;
+  const avgProfitPerOrderUsd = ordersCountUsd > 0 ? Number((totalProfitUsd / ordersCountUsd).toFixed(2)) : 0;
+  const profitGrowthUsd =
+    usdPrev.totalProfit > 0
+      ? Number((((totalProfitUsd - usdPrev.totalProfit) / usdPrev.totalProfit) * 100).toFixed(1))
+      : totalProfitUsd > 0
+      ? 100
+      : 0;
+  const revenueGrowthUsd =
+    usdPrev.totalRevenue > 0
+      ? Number((((totalRevenueUsd - usdPrev.totalRevenue) / usdPrev.totalRevenue) * 100).toFixed(1))
+      : totalRevenueUsd > 0
       ? 100
       : 0;
 
-  const prevRev = prev.totalRevenueUsd || 0;
-  const revenueGrowth =
-    prevRev > 0
-      ? Number((((totalRevenue - prevRev) / prevRev) * 100).toFixed(1))
-      : totalRevenue > 0
+  // SYP Calculations (Pure SYP figures - strictly NO exchange rate conversion)
+  const totalRevenueSyp = Math.round(sypCurr.totalRevenue || 0);
+  const totalCostSyp = Math.round(sypCurr.totalCost || 0);
+  const totalProfitSyp = Math.round(sypCurr.totalProfit || 0);
+  const ordersCountSyp = sypCurr.ordersCount || 0;
+  const profitMarginSyp = totalRevenueSyp > 0 ? Number(((totalProfitSyp / totalRevenueSyp) * 100).toFixed(1)) : 0;
+  const avgProfitPerOrderSyp = ordersCountSyp > 0 ? Math.round(totalProfitSyp / ordersCountSyp) : 0;
+  const profitGrowthSyp =
+    sypPrev.totalProfit > 0
+      ? Number((((totalProfitSyp - sypPrev.totalProfit) / sypPrev.totalProfit) * 100).toFixed(1))
+      : totalProfitSyp > 0
+      ? 100
+      : 0;
+  const revenueGrowthSyp =
+    sypPrev.totalRevenue > 0
+      ? Number((((totalRevenueSyp - sypPrev.totalRevenue) / sypPrev.totalRevenue) * 100).toFixed(1))
+      : totalRevenueSyp > 0
       ? 100
       : 0;
 
-  // 2. Timeline Breakdown (daily or monthly)
+  // 2. Timeline Breakdown (Grouped by Date and Currency)
   const timelineAgg = await Order.aggregate([
     { $match: periodMatch },
-    { $project: projectUsdFields },
-    {
-      $group: {
-        _id: { $dateToString: { format: groupByFormat, date: '$createdAt' } },
-        revenue: { $sum: '$userPriceUsd' },
-        cost: { $sum: '$costPriceUsd' },
-        profit: { $sum: '$profitUsd' },
-        ordersCount: { $sum: 1 },
-      },
-    },
-    { $sort: { _id: 1 } },
-  ]);
-
-  const timeline = timelineAgg.map((item) => ({
-    date: item._id,
-    revenue: Number((item.revenue || 0).toFixed(2)),
-    cost: Number((item.cost || 0).toFixed(2)),
-    profit: Number((item.profit || 0).toFixed(2)),
-    ordersCount: item.ordersCount || 0,
-  }));
-
-  // 3. Top Profitable Products (Top 10)
-  const topProductsAgg = await Order.aggregate([
-    { $match: periodMatch },
-    { $project: projectUsdFields },
+    { $project: projectFields },
     {
       $group: {
         _id: {
-          productName: '$productName',
-          productId: '$productId',
+          date: { $dateToString: { format: groupByFormat, date: '$createdAt' } },
+          currencyType: '$currencyType',
         },
-        image: { $first: '$image' },
-        category: { $first: '$category' },
-        totalProfit: { $sum: '$profitUsd' },
-        totalRevenue: { $sum: '$userPriceUsd' },
+        revenue: { $sum: '$userPrice' },
+        cost: { $sum: '$costPrice' },
+        profit: { $sum: '$profit' },
         ordersCount: { $sum: 1 },
       },
     },
-    { $sort: { totalProfit: -1 } },
-    { $limit: 10 },
+    { $sort: { '_id.date': 1 } },
   ]);
 
-  const topProducts = topProductsAgg.map((item, index) => {
+  const timelineUsd = timelineAgg
+    .filter((i) => i._id.currencyType === 'USD')
+    .map((item) => ({
+      date: item._id.date,
+      revenue: Number((item.revenue || 0).toFixed(2)),
+      cost: Number((item.cost || 0).toFixed(2)),
+      profit: Number((item.profit || 0).toFixed(2)),
+      ordersCount: item.ordersCount || 0,
+    }));
+
+  const timelineSyp = timelineAgg
+    .filter((i) => i._id.currencyType === 'SYP')
+    .map((item) => ({
+      date: item._id.date,
+      revenue: Math.round(item.revenue || 0),
+      cost: Math.round(item.cost || 0),
+      profit: Math.round(item.profit || 0),
+      ordersCount: item.ordersCount || 0,
+    }));
+
+  // 3. Top Profitable Products (Top 10 separated for USD and SYP)
+  const [topProductsAggUsd, topProductsAggSyp] = await Promise.all([
+    Order.aggregate([
+      { $match: periodMatch },
+      { $project: projectFields },
+      { $match: { currencyType: 'USD' } },
+      {
+        $group: {
+          _id: {
+            productName: '$productName',
+            productId: '$productId',
+          },
+          image: { $first: '$image' },
+          category: { $first: '$category' },
+          totalProfit: { $sum: '$profit' },
+          totalRevenue: { $sum: '$userPrice' },
+          ordersCount: { $sum: 1 },
+        },
+      },
+      { $sort: { totalProfit: -1 } },
+      { $limit: 10 },
+    ]),
+    Order.aggregate([
+      { $match: periodMatch },
+      { $project: projectFields },
+      { $match: { currencyType: 'SYP' } },
+      {
+        $group: {
+          _id: {
+            productName: '$productName',
+            productId: '$productId',
+          },
+          image: { $first: '$image' },
+          category: { $first: '$category' },
+          totalProfit: { $sum: '$profit' },
+          totalRevenue: { $sum: '$userPrice' },
+          ordersCount: { $sum: 1 },
+        },
+      },
+      { $sort: { totalProfit: -1 } },
+      { $limit: 10 },
+    ]),
+  ]);
+
+  const topProductsUsd = topProductsAggUsd.map((item, index) => {
     const rev = Number((item.totalRevenue || 0).toFixed(2));
     const prf = Number((item.totalProfit || 0).toFixed(2));
     return {
@@ -1240,6 +1301,7 @@ export const getProfitReportsAdmin = async (query = {}) => {
       productName: item._id.productName || 'منتج غير محدد',
       image: item.image || '',
       category: item.category || 'عام',
+      currency: 'USD',
       totalProfit: prf,
       totalRevenue: rev,
       ordersCount: item.ordersCount,
@@ -1247,22 +1309,56 @@ export const getProfitReportsAdmin = async (query = {}) => {
     };
   });
 
-  // 4. Category Breakdown
-  const categoryAgg = await Order.aggregate([
-    { $match: periodMatch },
-    { $project: projectUsdFields },
-    {
-      $group: {
-        _id: '$category',
-        totalProfit: { $sum: '$profitUsd' },
-        totalRevenue: { $sum: '$userPriceUsd' },
-        ordersCount: { $sum: 1 },
+  const topProductsSyp = topProductsAggSyp.map((item, index) => {
+    const rev = Math.round(item.totalRevenue || 0);
+    const prf = Math.round(item.totalProfit || 0);
+    return {
+      rank: index + 1,
+      productId: item._id.productId,
+      productName: item._id.productName || 'منتج غير محدد',
+      image: item.image || '',
+      category: item.category || 'عام',
+      currency: 'SYP',
+      totalProfit: prf,
+      totalRevenue: rev,
+      ordersCount: item.ordersCount,
+      profitMargin: rev > 0 ? Number(((prf / rev) * 100).toFixed(1)) : 0,
+    };
+  });
+
+  // 4. Category Breakdown separated for USD and SYP
+  const [categoryAggUsd, categoryAggSyp] = await Promise.all([
+    Order.aggregate([
+      { $match: periodMatch },
+      { $project: projectFields },
+      { $match: { currencyType: 'USD' } },
+      {
+        $group: {
+          _id: '$category',
+          totalProfit: { $sum: '$profit' },
+          totalRevenue: { $sum: '$userPrice' },
+          ordersCount: { $sum: 1 },
+        },
       },
-    },
-    { $sort: { totalProfit: -1 } },
+      { $sort: { totalProfit: -1 } },
+    ]),
+    Order.aggregate([
+      { $match: periodMatch },
+      { $project: projectFields },
+      { $match: { currencyType: 'SYP' } },
+      {
+        $group: {
+          _id: '$category',
+          totalProfit: { $sum: '$profit' },
+          totalRevenue: { $sum: '$userPrice' },
+          ordersCount: { $sum: 1 },
+        },
+      },
+      { $sort: { totalProfit: -1 } },
+    ]),
   ]);
 
-  const categories = categoryAgg.map((item) => {
+  const categoriesUsd = categoryAggUsd.map((item) => {
     const catProfit = Number((item.totalProfit || 0).toFixed(2));
     const catRev = Number((item.totalRevenue || 0).toFixed(2));
     return {
@@ -1270,7 +1366,19 @@ export const getProfitReportsAdmin = async (query = {}) => {
       totalProfit: catProfit,
       totalRevenue: catRev,
       ordersCount: item.ordersCount,
-      profitShare: totalProfit > 0 ? Number(((catProfit / totalProfit) * 100).toFixed(1)) : 0,
+      profitShare: totalProfitUsd > 0 ? Number(((catProfit / totalProfitUsd) * 100).toFixed(1)) : 0,
+    };
+  });
+
+  const categoriesSyp = categoryAggSyp.map((item) => {
+    const catProfit = Math.round(item.totalProfit || 0);
+    const catRev = Math.round(item.totalRevenue || 0);
+    return {
+      category: item._id || 'غير مصنف',
+      totalProfit: catProfit,
+      totalRevenue: catRev,
+      ordersCount: item.ordersCount,
+      profitShare: totalProfitSyp > 0 ? Number(((catProfit / totalProfitSyp) * 100).toFixed(1)) : 0,
     };
   });
 
@@ -1280,21 +1388,57 @@ export const getProfitReportsAdmin = async (query = {}) => {
     endDate: endDate.toISOString(),
     exchangeRate,
     summary: {
-      totalRevenueUsd: totalRevenue,
-      totalCostUsd: totalCost,
-      totalProfitUsd: totalProfit,
-      totalRevenueSyp: Math.round(totalRevenue * exchangeRate),
-      totalCostSyp: Math.round(totalCost * exchangeRate),
-      totalProfitSyp: Math.round(totalProfit * exchangeRate),
-      ordersCount,
-      profitMargin,
-      avgProfitPerOrder,
-      profitGrowth,
-      revenueGrowth,
+      totalRevenueUsd,
+      totalCostUsd,
+      totalProfitUsd,
+      ordersCountUsd,
+      profitMarginUsd,
+      avgProfitPerOrderUsd,
+      profitGrowthUsd,
+      revenueGrowthUsd,
+      totalRevenueSyp,
+      totalCostSyp,
+      totalProfitSyp,
+      ordersCountSyp,
+      profitMarginSyp,
+      avgProfitPerOrderSyp,
+      profitGrowthSyp,
+      revenueGrowthSyp,
+      ordersCount: ordersCountUsd + ordersCountSyp,
     },
-    timeline,
-    topProducts,
-    categories,
+    usd: {
+      summary: {
+        totalRevenue: totalRevenueUsd,
+        totalCost: totalCostUsd,
+        totalProfit: totalProfitUsd,
+        ordersCount: ordersCountUsd,
+        profitMargin: profitMarginUsd,
+        avgProfitPerOrder: avgProfitPerOrderUsd,
+        profitGrowth: profitGrowthUsd,
+        revenueGrowth: revenueGrowthUsd,
+      },
+      timeline: timelineUsd,
+      topProducts: topProductsUsd,
+      categories: categoriesUsd,
+    },
+    syp: {
+      summary: {
+        totalRevenue: totalRevenueSyp,
+        totalCost: totalCostSyp,
+        totalProfit: totalProfitSyp,
+        ordersCount: ordersCountSyp,
+        profitMargin: profitMarginSyp,
+        avgProfitPerOrder: avgProfitPerOrderSyp,
+        profitGrowth: profitGrowthSyp,
+        revenueGrowth: revenueGrowthSyp,
+      },
+      timeline: timelineSyp,
+      topProducts: topProductsSyp,
+      categories: categoriesSyp,
+    },
+    timeline: timelineUsd,
+    topProducts: topProductsUsd,
+    categories: categoriesUsd,
   };
 };
 
