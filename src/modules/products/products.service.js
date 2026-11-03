@@ -1235,43 +1235,31 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     { subCategoryId: { $in: allSubCatIds } },
   ];
   if (subNames.length > 0) {
-    const nameClause = {
-      $and: [
-        {
-          $or: [
-            { subCategoryId: null },
-            { subCategoryId: { $exists: false } },
-          ],
-        },
-        {
-          $or: [
-            { subCategoryName: { $in: subNames } },
-            { category: { $in: subNames } },
-          ],
-        },
+    matchClauses.push({
+      $or: [
+        { subCategoryName: { $in: subNames } },
+        { category: { $in: subNames } },
       ],
-    };
-    if (mainCategory && mainCategory !== 'all') {
-      nameClause.mainCategory = mainCategory;
-    }
-    matchClauses.push(nameClause);
+    });
   }
 
-  const productMatch = { $or: matchClauses };
+  const andList = [{ $or: matchClauses }];
   if (mainCategory && mainCategory !== 'all') {
-    productMatch.mainCategory = mainCategory;
+    andList.push({ mainCategory });
   }
 
   // For regular users, only count visible, available, and currency-matched products.
   // For Admins, count all products accurately so the folder counter matches the admin folder view.
   if (!isAdmin) {
-    productMatch.isAvailable = { $ne: false };
-    productMatch.isVisible = { $ne: false };
+    andList.push({ isAvailable: { $ne: false } });
+    andList.push({ isVisible: { $ne: false } });
     const currencyFilter = buildCurrencyProductFilter(userCurrency);
     if (currencyFilter) {
-      productMatch.$and = [currencyFilter];
+      andList.push(currencyFilter);
     }
   }
+
+  const productMatch = andList.length === 1 ? andList[0] : { $and: andList };
 
   const products = await Product.find(productMatch).select(
     'id _id name image price sellingPrice originalPrice currency isAvailable isVisible subCategoryId subCategoryName category source'
@@ -1313,11 +1301,11 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       ...sc,
       id: sIdStr,
       parentId: sc.parentId ? sc.parentId.toString() : null,
-      productCount: directCount,
+      productCount: totalProductCount > 0 ? totalProductCount : directCount,
       directCount,
       totalProductCount,
       childCount,
-      isEmpty: directCount === 0 && childCount === 0,
+      isEmpty: (totalProductCount > 0 ? totalProductCount : directCount) === 0 && childCount === 0,
       canDelete: directCount === 0 && childCount === 0,
       products: scProducts,
       startingPrice,
@@ -1523,27 +1511,39 @@ export const deleteSubCategory = async (id) => {
   return { message: 'تم حذف المجلد بنجاح', id };
 };
 
-export const reorderSubCategories = async (items = []) => {
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new ApiError('Ù‚Ø§Ø¦Ù…Ø© Ø§Ù„ØªØ±ØªÙŠØ¨ ÙØ§Ø±ØºØ©', HTTP_STATUS.BAD_REQUEST);
+export const reorderSubCategories = async (items) => {
+  let list = Array.isArray(items) ? items : items?.items;
+  if (!Array.isArray(list)) {
+    throw new ApiError('Ø§Ù„Ù…ØµÙÙˆÙØ© Ø§Ù„Ù…Ø·Ù„ÙˆØ¨Ø© ØºÙŠØ± ØµØ§Ù„Ø­Ø©', HTTP_STATUS.BAD_REQUEST);
   }
 
-  const bulkOps = items
-    .filter((item) => item.id && mongoose.Types.ObjectId.isValid(item.id))
-    .map((item, index) => ({
-      updateOne: {
-        filter: { _id: new mongoose.Types.ObjectId(item.id) },
-        update: { $set: { sortOrder: typeof item.sortOrder === 'number' ? item.sortOrder : index } },
-      },
-    }));
+  const bulkOps = list
+    .map((item, index) => {
+      const id = item.id || item._id;
+      const sortOrder = item.sortOrder !== undefined ? Number(item.sortOrder) : index;
+      if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
+      return {
+        updateOne: {
+          filter: { _id: new mongoose.Types.ObjectId(id) },
+          update: { $set: { sortOrder } },
+        },
+      };
+    })
+    .filter(Boolean);
 
   if (bulkOps.length > 0) {
     await SubCategory.bulkWrite(bulkOps);
   }
 
   serverCache.clearAll();
-  return { success: true, count: bulkOps.length, message: 'ØªÙ… Ø­ÙØ¸ ØªØ±ØªÙŠØ¨ Ø§Ù„Ø£Ù‚Ø³Ø§Ù… Ø§Ù„ÙØ±Ø¹ÙŠØ© Ø¨Ù†Ø¬Ø§Ø­' };
+
+  return {
+    success: true,
+    message: 'ØªÙ… Ø­ÙØ¸ ØªØ±ØªÙŠØ¨ Ø§Ù„Ø£Ù‚Ø³Ø§Ù… Ø§Ù„ÙØ±Ø¹ÙŠØ© Ø¨Ù†Ø¬Ø§Ø­',
+    updatedCount: bulkOps.length,
+  };
 };
+
 export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCategoryName, subCategoryImage, mainCategory }) => {
   if (!Array.isArray(productIds) || productIds.length === 0) {
     throw new ApiError('يجب تحديد المنتجات أولاً', HTTP_STATUS.BAD_REQUEST);
