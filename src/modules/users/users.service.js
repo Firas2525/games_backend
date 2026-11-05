@@ -386,7 +386,7 @@ export const redeemCoins = async (userId, requestedCoins) => {
   const prevBalance = Number((user.balance || 0).toFixed(4));
   const newBalance = Number((prevBalance + creditAmount).toFixed(4));
 
-  user.coins = Math.max(0, userCoins - coinsToRedeem);
+  user.coins = Number(Math.max(0, userCoins - coinsToRedeem).toFixed(1));
   user.balance = newBalance;
   await user.save();
 

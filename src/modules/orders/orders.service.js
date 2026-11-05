@@ -429,11 +429,12 @@ export const executePurchase = async ({
       if (effectiveCurrency === 'ل.س' || effectiveCurrency === 'SYP' || user.currency === 'SYP') {
         spentInUsd = totalUserPrice / exchangeRate;
       }
-      coinsAwarded = Math.round(spentInUsd * (cashbackPercentage / 100));
+      const rawCoins = spentInUsd * (cashbackPercentage / 100);
+      coinsAwarded = Number((Math.round(rawCoins * 10) / 10).toFixed(1));
 
 
       if (coinsAwarded > 0) {
-        user.coins = (user.coins || 0) + coinsAwarded;
+        user.coins = Number(((user.coins || 0) + coinsAwarded).toFixed(1));
         await user.save();
 
         order.coinsEarned = coinsAwarded;
@@ -483,7 +484,7 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
   const coinsDeducted = Number(order.coinsEarned || 0);
   if (coinsDeducted > 0) {
-    user.coins = Math.max(0, (user.coins || 0) - coinsDeducted);
+    user.coins = Number(Math.max(0, (user.coins || 0) - coinsDeducted).toFixed(1));
   }
   await user.save();
 
