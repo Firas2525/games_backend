@@ -2,7 +2,7 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import * as ordersService from './orders.service.js';
-import { sendAdminNotification, getFcmDiagnostics } from '../../config/firebaseAdmin.js';
+import { sendAdminNotification, getFcmDiagnostics, sendDirectTokenPush } from '../../config/firebaseAdmin.js';
 
 export const purchase = asyncHandler(async (req, res) => {
   const userId = req.user.id || req.user._id;
@@ -98,5 +98,17 @@ export const testAdminNotification = asyncHandler(async (req, res) => {
 export const getFcmDiagnosticsHandler = asyncHandler(async (req, res) => {
   const diagnostics = await getFcmDiagnostics();
   return ApiResponse.success(res, diagnostics, 'FCM diagnostics retrieved successfully');
+});
+
+export const testDirectTokenHandler = asyncHandler(async (req, res) => {
+  const token = req.query.token || req.body?.token;
+  if (!token) {
+    return ApiResponse.error(res, 'Token is required', HTTP_STATUS.BAD_REQUEST);
+  }
+  const result = await sendDirectTokenPush(token, {
+    title: req.query.title || 'إشعار فوري مباشر 🎮',
+    body: req.query.body || 'هذا فحص فوري للتأكد من وصول الإشعار المباشر لجهازك!',
+  });
+  return ApiResponse.success(res, result, result.success ? 'Delivered' : 'Failed');
 });
 

@@ -80,21 +80,29 @@ try {
  */
 export const getFcmDiagnostics = async () => {
   let adminTokens = [];
+  let userTokens = [];
   try {
-    const admins = await User.find({
-      role: 'admin',
+    const allUsers = await User.find({
       fcmToken: { $exists: true, $nin: ['', null] },
-    }).select('name email fcmToken updatedAt').lean();
+    }).select('name email role fcmToken updatedAt').lean();
 
-    adminTokens = admins.map((a) => ({
-      name: a.name,
-      email: a.email,
-      tokenPreview: a.fcmToken ? `${a.fcmToken.slice(0, 14)}...` : '',
-      tokenLength: a.fcmToken ? a.fcmToken.length : 0,
-      updatedAt: a.updatedAt,
-    }));
+    for (const u of allUsers) {
+      const info = {
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        tokenPreview: u.fcmToken ? `${u.fcmToken.slice(0, 14)}...` : '',
+        tokenLength: u.fcmToken ? u.fcmToken.length : 0,
+        updatedAt: u.updatedAt,
+      };
+      if (u.role === 'admin') {
+        adminTokens.push(info);
+      } else {
+        userTokens.push(info);
+      }
+    }
   } catch (e) {
-    console.error('[FirebaseAdmin] Error fetching admin tokens for diagnostics:', e.message);
+    console.error('[FirebaseAdmin] Error fetching tokens for diagnostics:', e.message);
   }
 
   return {
@@ -103,7 +111,43 @@ export const getFcmDiagnostics = async () => {
     envVarLength: process.env.FIREBASE_SERVICE_ACCOUNT ? process.env.FIREBASE_SERVICE_ACCOUNT.length : 0,
     registeredAdminTokensCount: adminTokens.length,
     adminsWithTokens: adminTokens,
+    registeredUserTokensCount: userTokens.length,
+    usersWithTokens: userTokens,
   };
+};
+
+/**
+ * Direct push to a specific FCM token string (for instant testing / diagnostics)
+ */
+export const sendDirectTokenPush = async (token, { title, body, data = {} } = {}) => {
+  if (!firebaseApp) return { success: false, reason: 'uninitialized' };
+  try {
+    const stringifiedData = Object.fromEntries(
+      Object.entries(data || {}).map(([k, v]) => [k, String(v ?? '')])
+    );
+    const message = {
+      token: String(token).trim(),
+      notification: {
+        title: title || 'إشعار فوري مباشر 🎮',
+        body: body || 'هذا إشعار مباشر من السيرفر!',
+      },
+      data: stringifiedData,
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'user_notifications',
+          priority: 'max',
+          defaultVibrateTimings: true,
+          defaultSound: true,
+        },
+      },
+    };
+    const res = await admin.messaging().send(message);
+    return { success: true, messageId: res };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 };
 
 /**
