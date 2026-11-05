@@ -429,8 +429,8 @@ export const executePurchase = async ({
       if (effectiveCurrency === 'ل.س' || effectiveCurrency === 'SYP' || user.currency === 'SYP') {
         spentInUsd = totalUserPrice / exchangeRate;
       }
-      const cashbackUsd = spentInUsd * (cashbackPercentage / 100);
-      coinsAwarded = Math.round(cashbackUsd * coinsPerDollar);
+      coinsAwarded = Math.round(spentInUsd * (cashbackPercentage / 100));
+
 
       if (coinsAwarded > 0) {
         user.coins = (user.coins || 0) + coinsAwarded;

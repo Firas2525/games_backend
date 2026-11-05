@@ -41,7 +41,7 @@ export const updateSettings = async (data = {}) => {
     settings.telegramChannel = String(data.telegramChannel || '').trim();
   }
   if (data.cashbackPercentage !== undefined) {
-    settings.cashbackPercentage = Math.min(100, Math.max(0, Number(data.cashbackPercentage) || 0));
+    settings.cashbackPercentage = Math.max(0, Number(data.cashbackPercentage) || 0);
   }
   if (data.coinsPerDollar !== undefined) {
     settings.coinsPerDollar = Math.max(1, Math.round(Number(data.coinsPerDollar)) || 100);
