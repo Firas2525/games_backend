@@ -9,6 +9,9 @@ export const getSettings = async () => {
       profitPercentage: 0,
       tickerText: 'أهلاً بكم في متجر الألعاب! شحن فوري وآلي لكافة الألعاب والبطاقات الرقمية على مدار الساعة.',
       isTickerActive: true,
+      cashbackPercentage: 5,
+      coinsPerDollar: 100,
+      isCashbackActive: true,
     });
   }
   return settings;
@@ -36,6 +39,15 @@ export const updateSettings = async (data = {}) => {
   }
   if (data.telegramChannel !== undefined) {
     settings.telegramChannel = String(data.telegramChannel || '').trim();
+  }
+  if (data.cashbackPercentage !== undefined) {
+    settings.cashbackPercentage = Math.min(100, Math.max(0, Number(data.cashbackPercentage) || 0));
+  }
+  if (data.coinsPerDollar !== undefined) {
+    settings.coinsPerDollar = Math.max(1, Math.round(Number(data.coinsPerDollar)) || 100);
+  }
+  if (data.isCashbackActive !== undefined) {
+    settings.isCashbackActive = Boolean(data.isCashbackActive);
   }
   await settings.save();
   return settings;

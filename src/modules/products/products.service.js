@@ -424,7 +424,11 @@ export const resolveProductProfitPercentage = (product, globalProfit, catMap = {
 // 4. Admin: Get all normalized products with filters
 export const getAdminProducts = async (query = {}) => {
   // Purge any residual Syria Card products in background
-  purgeSyriaCardProducts().catch(() => {});
+  const cacheKey = `admin_products_${JSON.stringify(query)}`;
+  const cached = serverCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
   const andClauses = [];
 
@@ -505,16 +509,26 @@ export const getAdminProducts = async (query = {}) => {
     };
   });
 
-  const categories = await Product.distinct('category', { source: { $nin: ['syria_card', 'auto1card'] } });
-  const sources = await Product.distinct('sourceName', { source: { $nin: ['syria_card', 'auto1card'] } });
+  const categoriesSet = new Set();
+  const sourcesSet = new Set();
+  for (const p of mappedProducts) {
+    if (p.category && p.category.trim()) categoriesSet.add(p.category.trim());
+    if (p.sourceName && p.sourceName.trim()) sourcesSet.add(p.sourceName.trim());
+  }
+  const categories = Array.from(categoriesSet).sort();
+  const sources = Array.from(sourcesSet).sort();
 
-  return {
+  const result = {
     products: mappedProducts,
     categories,
     sources,
     profitPercentage: globalProfitPercentage,
     totalCount: products.length,
   };
+
+  serverCache.set(cacheKey, result, 120);
+
+  return result;
 };
 
 // 4.1 Live Verified Catalog Statistics

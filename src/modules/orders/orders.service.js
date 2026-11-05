@@ -481,8 +481,9 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   user.balance = newBal;
   user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - refundAmount).toFixed(4));
   user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - (order.profit || 0)).toFixed(4));
-  if (order.coinsEarned && order.coinsEarned > 0) {
-    user.coins = Math.max(0, (user.coins || 0) - order.coinsEarned);
+  const coinsDeducted = Number(order.coinsEarned || 0);
+  if (coinsDeducted > 0) {
+    user.coins = Math.max(0, (user.coins || 0) - coinsDeducted);
   }
   await user.save();
 
@@ -514,17 +515,18 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
         previousBalance: prevBal,
         newBalance: newBal,
         note:
-          customNote ||
-          `استرجاع رصيد تلقائي لإلغاء/فشل الطلب (#${resultData?.providerOrderNumber || order.providerOrderId || order.orderId}): ${order.productName || ''} (تم استرجاع ${refundAmount} ${normalizedCurrency} متضمنة نسبة الربح كاملة)`,
+          (customNote ? (coinsDeducted > 0 ? `${customNote} (تم إلغاء ${coinsDeducted} كوينز كاش باك)` : customNote) : null) ||
+          `استرجاع رصيد تلقائي لإلغاء/فشل الطلب (#${resultData?.providerOrderNumber || order.providerOrderId || order.orderId}): ${order.productName || ''} (تم استرجاع ${refundAmount} ${normalizedCurrency} متضمنة نسبة الربح كاملة${coinsDeducted > 0 ? ` وإلغاء ${coinsDeducted} كوينز كاش باك` : ''})`,
       });
     }
   } catch (txErr) {
     console.error('[refundOrderWallet] Transaction logging failed (non-fatal):', txErr.message);
   }
   // Notify User about refund
+  const pushCoinsText = coinsDeducted > 0 ? ` وإلغاء ${coinsDeducted} كوينز كاش باك من حسابك.` : '.';
   sendDirectUserNotification(order.userId, {
     title: 'تحديث بشأن طلبك: تم استرجاع المبلغ ↩️',
-    body: `تم إلغاء/فشل طلب (${order.productName || 'طلب شحن'}) واسترجاع المبلغ (${refundAmount} ${normalizedCurrency}) إلى محفظتك.`,
+    body: `تم إلغاء/فشل طلب (${order.productName || 'طلب شحن'}) واسترجاع المبلغ (${refundAmount} ${normalizedCurrency}) إلى محفظتك${pushCoinsText}`,
     data: {
       type: 'order_refunded',
       orderId: String(order.orderId || order._id),
@@ -1225,9 +1227,11 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
 
   await order.save();
   // Notify User about custom order cancellation/rejection
+  const customCoinsDeducted = Number(order.coinsEarned || 0);
+  const customCoinsText = customCoinsDeducted > 0 ? ` وإلغاء ${customCoinsDeducted} كوينز كاش باك.` : '.';
   sendDirectUserNotification(order.userId, {
     title: isReject ? 'تحديث بشأن طلبك: تم رفض الطلب ⚠️' : 'تحديث بشأن طلبك: تم إلغاء الطلب ↩️',
-    body: `تم ${isReject ? 'رفض' : 'إلغاء'} طلب (${order.productName}) وإرجاع المبلغ (${order.userPrice} ${order.currency}) لمحفظتك.${reason ? ' السبب: ' + reason : ''}`,
+    body: `تم ${isReject ? 'رفض' : 'إلغاء'} طلب (${order.productName}) وإرجاع المبلغ (${order.userPrice} ${order.currency}) لمحفظتك${customCoinsText}${reason ? ' السبب: ' + reason : ''}`,
     data: {
       type: 'order_refunded',
       orderId: String(order.orderId || order._id),
