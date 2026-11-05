@@ -30,7 +30,7 @@ const verificationRequestSchema = new mongoose.Schema(
     },
     documentUrl: {
       type: String,
-      required: [true, 'صورة وثيقة التوثيق مطلوبة'],
+      default: '',
       trim: true,
     },
     fieldsData: {

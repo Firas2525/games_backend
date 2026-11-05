@@ -213,4 +213,157 @@ export const sendAdminNotification = async ({ title, body, data = {} }) => {
   }
 };
 
+/**
+ * Send push notification to all users subscribed to 'all_users' topic and direct active user tokens
+ * @param {Object} options
+ * @param {string} options.title Notification title
+ * @param {string} options.body Notification body
+ * @param {Object} [options.data] Key-value pairs for payload (strings only)
+ */
+export const sendBroadcastNotificationToUsers = async ({ title, body, data = {} }) => {
+  if (!firebaseApp) {
+    console.warn('[FirebaseAdmin] Skipped sendBroadcastNotificationToUsers: Firebase Admin not initialized.');
+    return { success: false, reason: initStatus.error || 'uninitialized' };
+  }
+
+  try {
+    const stringifiedData = Object.fromEntries(
+      Object.entries(data || {}).map(([k, v]) => [k, String(v ?? '')])
+    );
+
+    const message = {
+      topic: 'all_users',
+      notification: {
+        title,
+        body,
+      },
+      data: stringifiedData,
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'user_notifications',
+          priority: 'max',
+          defaultVibrateTimings: true,
+          defaultSound: true,
+        },
+      },
+    };
+
+    let topicResponse = null;
+    let directDeliveryCount = 0;
+    let errors = [];
+
+    // 1. Send to 'all_users' topic
+    try {
+      topicResponse = await admin.messaging().send(message);
+      console.log('[FirebaseAdmin] Notification sent to all_users topic:', topicResponse);
+    } catch (tErr) {
+      errors.push(`Topic error: ${tErr.message}`);
+      console.error('[FirebaseAdmin] Error sending to all_users topic:', tErr.message);
+    }
+
+    // 2. Also send to 'users' topic
+    try {
+      await admin.messaging().send({ ...message, topic: 'users' });
+    } catch (_) {}
+
+    // 3. Direct delivery to active user tokens
+    try {
+      const activeUsers = await User.find({
+        role: { $ne: 'admin' },
+        fcmToken: { $exists: true, $nin: ['', null] },
+      }).select('fcmToken').lean();
+
+      const tokens = [...new Set(activeUsers.map((u) => u.fcmToken).filter(Boolean))];
+      if (tokens.length > 0) {
+        const batchSize = 500;
+        for (let i = 0; i < tokens.length; i += batchSize) {
+          const batch = tokens.slice(i, i + batchSize);
+          const multiRes = await admin.messaging().sendEachForMulticast({
+            tokens: batch,
+            notification: { title, body },
+            data: stringifiedData,
+            android: {
+              priority: 'high',
+              notification: {
+                sound: 'default',
+                channelId: 'user_notifications',
+                priority: 'max',
+                defaultVibrateTimings: true,
+                defaultSound: true,
+              },
+            },
+          });
+          directDeliveryCount += multiRes.successCount;
+        }
+        console.log(`[FirebaseAdmin] Direct token multicast sent to ${tokens.length} users. Delivered: ${directDeliveryCount}`);
+      }
+    } catch (tokErr) {
+      errors.push(`Direct user token error: ${tokErr.message}`);
+      console.error('[FirebaseAdmin] Error sending direct user tokens:', tokErr.message);
+    }
+
+    const isSuccess = Boolean(topicResponse || directDeliveryCount > 0);
+    return {
+      success: isSuccess,
+      topicMessageId: topicResponse,
+      directDeliveryCount,
+      errors: errors.length > 0 ? errors : undefined,
+    };
+  } catch (error) {
+    console.error('[FirebaseAdmin] Failed to send push notification to users:', error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send targeted push notification directly to a specific user by userId
+ * @param {string|mongoose.Types.ObjectId} userId
+ * @param {Object} options
+ * @param {string} options.title Notification title
+ * @param {string} options.body Notification body
+ * @param {Object} [options.data] Key-value pairs for payload
+ */
+export const sendDirectUserNotification = async (userId, { title, body, data = {} }) => {
+  if (!firebaseApp) return { success: false, reason: 'uninitialized' };
+  try {
+    const user = await User.findById(userId).select('fcmToken name').lean();
+    if (!user || !user.fcmToken) {
+      console.warn(`[FirebaseAdmin] Skipped direct push: User ${userId} has no registered FCM token.`);
+      return { success: false, reason: 'no_token' };
+    }
+
+    const stringifiedData = Object.fromEntries(
+      Object.entries(data || {}).map(([k, v]) => [k, String(v ?? '')])
+    );
+
+    const message = {
+      token: user.fcmToken,
+      notification: {
+        title,
+        body,
+      },
+      data: stringifiedData,
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'user_notifications',
+          priority: 'max',
+          defaultVibrateTimings: true,
+          defaultSound: true,
+        },
+      },
+    };
+
+    const res = await admin.messaging().send(message);
+    console.log(`[FirebaseAdmin] Direct push notification delivered to user [${user.name}]:`, res);
+    return { success: true, messageId: res };
+  } catch (error) {
+    console.error(`[FirebaseAdmin] Error sending direct push notification to user ${userId}:`, error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 export default admin;

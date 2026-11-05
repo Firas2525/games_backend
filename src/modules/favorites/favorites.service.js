@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 import { Favorite } from './favorites.model.js';
 import { Product } from '../products/products.model.js';
 import { ApiError } from '../../utils/apiError.js';
@@ -91,9 +91,12 @@ export const getUserFavorites = async (userId, userCurrency = null) => {
   const settings = await getSettings();
   const globalProfitPercentage = settings.profitPercentage || 0;
   const { catMap, subCatMap } = await getCategoryProfitMap();
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
   const products = validItems.map((item) => {
     const doc = item.productId;
+    const isCustom = doc.source === 'custom';
     const effectiveProfit = resolveProductProfitPercentage(
       doc,
       globalProfitPercentage,
@@ -101,16 +104,19 @@ export const getUserFavorites = async (userId, userCurrency = null) => {
       subCatMap
     );
     const baseCost =
-      doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
+      doc.originalPrice && doc.originalPrice > 0
+        ? doc.originalPrice
+        : doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
         ? doc.sellingPrice
         : doc.price && doc.price > 0
         ? doc.price
-        : doc.originalPrice || 0;
+        : 0;
 
-    const priceBeforeDiscount =
-      effectiveProfit > 0
-        ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-        : baseCost;
+    const priceBeforeDiscount = isCustom
+      ? calcSmartPrice(doc.sellingPrice && doc.sellingPrice > 0 ? doc.sellingPrice : (doc.price || baseCost))
+      : (effectiveProfit > 0
+          ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
+          : baseCost);
 
     const discountPercent = doc.discountPercent || 0;
     const finalPrice =
@@ -121,9 +127,22 @@ export const getUserFavorites = async (userId, userCurrency = null) => {
     return {
       ...doc,
       id: doc._id.toString(),
-      costPrice: baseCost,
-      price: finalPrice,
-      priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
+    let finalCurrency = (doc.currency === 'BOTH' || doc.currency === 'ALL' || !doc.currency) ? '$' : doc.currency;
+    let convertedCost = baseCost;
+    let convertedPriceBeforeDiscount = priceBeforeDiscount;
+    let convertedFinalPrice = finalPrice;
+
+    if (isUserSyp && isCustom && (finalCurrency === '$' || finalCurrency === 'USD')) {
+      finalCurrency = 'Ù„.Ø³';
+      convertedCost = Math.round(baseCost * exchangeRate);
+      convertedPriceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
+      convertedFinalPrice = discountPercent > 0
+        ? Math.round(convertedPriceBeforeDiscount * (1 - discountPercent / 100))
+        : convertedPriceBeforeDiscount;
+    }
+      costPrice: convertedCost,
+      price: convertedFinalPrice,
+      priceBeforeDiscount: discountPercent > 0 ? convertedPriceBeforeDiscount : null,
       discountPercent,
       profitPercentage: effectiveProfit,
       isFavorite: true,

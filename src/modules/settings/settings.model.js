@@ -33,8 +33,10 @@ const settingsSchema = new mongoose.Schema(
       default: {},
     },
     verificationRequiredFields: {
-      type: [String],
-      default: ['الاسم الثلاثي'],
+      type: [mongoose.Schema.Types.Mixed],
+      default: [
+        { id: 'full_name', name: 'الاسم الثلاثي', type: 'text', required: true }
+      ],
     },
     whatsappSupport: {
       type: String,

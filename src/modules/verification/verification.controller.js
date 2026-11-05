@@ -6,14 +6,49 @@ import { getSettings } from '../settings/settings.service.js';
 import { sendAdminNotification } from '../../config/firebaseAdmin.js';
 
 /**
+ * Normalization helper for dynamic verification fields
+ */
+export const normalizeField = (field, index = 0) => {
+  if (typeof field === 'string') {
+    const trimmed = field.trim();
+    if (!trimmed) return null;
+    return {
+      id: trimmed,
+      name: trimmed,
+      type: 'text',
+      required: true,
+    };
+  }
+  if (field && typeof field === 'object') {
+    const name = (field.name || field.label || '').toString().trim();
+    if (!name) return null;
+    const id = (field.id || name).toString().trim();
+    const type = field.type === 'image' ? 'image' : 'text';
+    const required = field.required !== false;
+    return { id, name, type, required };
+  }
+  return null;
+};
+
+export const normalizeFieldsList = (fields) => {
+  if (!Array.isArray(fields)) return [];
+  return fields
+    .map((f, i) => normalizeField(f, i))
+    .filter(Boolean);
+};
+
+/**
  * Get verification required fields
  */
 export const getVerificationFields = async (req, res) => {
   try {
     const settings = await getSettings();
-    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
-      ? settings.verificationRequiredFields
-      : ['الاسم الثلاثي'];
+    let requiredFields = normalizeFieldsList(settings.verificationRequiredFields);
+    if (requiredFields.length === 0) {
+      requiredFields = [
+        { id: 'full_name', name: 'الاسم الثلاثي', type: 'text', required: true }
+      ];
+    }
 
     return ApiResponse.success(
       res,
@@ -39,9 +74,7 @@ export const updateVerificationFields = async (req, res) => {
       );
     }
 
-    const cleanedFields = fields
-      .map((f) => (typeof f === 'string' ? f.trim() : ''))
-      .filter((f) => f.length > 0);
+    const cleanedFields = normalizeFieldsList(fields);
 
     const settings = await getSettings();
     settings.verificationRequiredFields = cleanedFields;
@@ -49,7 +82,7 @@ export const updateVerificationFields = async (req, res) => {
 
     return ApiResponse.success(
       res,
-      { requiredFields: settings.verificationRequiredFields },
+      { requiredFields: cleanedFields },
       'تم تحديث حقول التوثيق المطلوبة بنجاح ⚙️'
     );
   } catch (error) {
@@ -65,14 +98,6 @@ export const submitVerificationRequest = async (req, res) => {
     const userId = req.user?._id;
     let { documentUrl, notes, fieldsData } = req.body;
 
-    if (!documentUrl || typeof documentUrl !== 'string' || !documentUrl.trim()) {
-      return ApiResponse.error(
-        res,
-        'يرجى إرفاق صورة وثيقة إثبات الشخصية لتوثيق الحساب',
-        HTTP_STATUS.BAD_REQUEST
-      );
-    }
-
     // Parse fieldsData if sent as string
     if (typeof fieldsData === 'string') {
       try {
@@ -85,20 +110,49 @@ export const submitVerificationRequest = async (req, res) => {
 
     // Validate required fields from system settings
     const settings = await getSettings();
-    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
-      ? settings.verificationRequiredFields
-      : ['الاسم الثلاثي'];
+    let requiredFields = normalizeFieldsList(settings.verificationRequiredFields);
+    if (requiredFields.length === 0) {
+      requiredFields = [
+        { id: 'full_name', name: 'الاسم الثلاثي', type: 'text', required: true }
+      ];
+    }
 
-    for (const fieldName of requiredFields) {
-      const val = fieldsData[fieldName];
+    for (const field of requiredFields) {
+      if (!field.required) continue;
+      const val = fieldsData[field.name] || fieldsData[field.id];
       if (!val || typeof val !== 'string' || !val.trim()) {
         return ApiResponse.error(
           res,
-          `يرجى تعبئة الحقل المطلوب: (${fieldName})`,
+          field.type === 'image'
+            ? `يرجى إرفاق صورة (${field.name})`
+            : `يرجى تعبئة الحقل المطلوب: (${field.name})`,
           HTTP_STATUS.BAD_REQUEST
         );
       }
     }
+
+    // If documentUrl is not explicitly sent, check if any image field was submitted
+    if (!documentUrl || typeof documentUrl !== 'string' || !documentUrl.trim()) {
+      for (const field of requiredFields) {
+        if (field.type === 'image') {
+          const imgVal = fieldsData[field.name] || fieldsData[field.id];
+          if (imgVal && typeof imgVal === 'string' && imgVal.trim()) {
+            documentUrl = imgVal.trim();
+            break;
+          }
+        }
+      }
+    }
+
+    const hasImageFields = requiredFields.some((f) => f.type === 'image' && f.required);
+    if (hasImageFields && (!documentUrl || typeof documentUrl !== 'string' || !documentUrl.trim())) {
+      return ApiResponse.error(
+        res,
+        'يرجى إرفاق صورة وثيقة إثبات الشخصية المطلوبة',
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+    documentUrl = documentUrl ? documentUrl.trim() : '';
 
     const user = await User.findById(userId);
     if (!user) {
@@ -181,9 +235,12 @@ export const getMyVerificationStatus = async (req, res) => {
     ]);
     const latestRequest = requests.length > 0 ? requests[0] : null;
 
-    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
-      ? settings.verificationRequiredFields
-      : ['الاسم الثلاثي'];
+    let requiredFields = normalizeFieldsList(settings.verificationRequiredFields);
+    if (requiredFields.length === 0) {
+      requiredFields = [
+        { id: 'full_name', name: 'الاسم الثلاثي', type: 'text', required: true }
+      ];
+    }
 
     return ApiResponse.success(
       res,
@@ -235,9 +292,12 @@ export const getAdminVerificationRequests = async (req, res) => {
       getSettings(),
     ]);
 
-    const requiredFields = settings.verificationRequiredFields && settings.verificationRequiredFields.length > 0
-      ? settings.verificationRequiredFields
-      : ['الاسم الثلاثي'];
+    let requiredFields = normalizeFieldsList(settings.verificationRequiredFields);
+    if (requiredFields.length === 0) {
+      requiredFields = [
+        { id: 'full_name', name: 'الاسم الثلاثي', type: 'text', required: true }
+      ];
+    }
 
     return ApiResponse.success(
       res,

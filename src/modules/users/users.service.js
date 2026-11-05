@@ -6,6 +6,7 @@ import { Order } from '../orders/orders.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { sendDirectUserNotification } from '../../config/firebaseAdmin.js';
 
 export const getAllUsers = async (query = {}) => {
   const filter = {};
@@ -114,6 +115,17 @@ export const depositBalance = async ({ userId, amount, note = '', adminId }) => 
     note,
   });
 
+  // Push notification to user
+  sendDirectUserNotification(user._id, {
+    title: 'تم شحن رصيد في محفظتك 💳',
+    body: `تمت إضافة ${parsedAmount} ${user.currency || 'USD'} إلى محفظتك من قبل الإدارة.${note ? ' البيان: ' + note : ''} رصيدك الحالي: ${newBalance} ${user.currency || 'USD'}.`,
+    data: {
+      type: 'balance_deposit',
+      amount: String(parsedAmount),
+      balance: String(newBalance),
+    },
+  }).catch((err) => console.error('[depositBalance Push Error]:', err.message));
+
   return {
     user: user.toJSON(),
     transaction: transaction.toJSON(),
@@ -151,6 +163,17 @@ export const deductBalance = async ({ userId, amount, note = '', adminId }) => {
     newBalance,
     note,
   });
+
+  // Push notification to user
+  sendDirectUserNotification(user._id, {
+    title: 'تعديل رصيد المحفظة 💳',
+    body: `تم خصم ${parsedAmount} ${user.currency || 'USD'} من محفظتك.${note ? ' البيان: ' + note : ''} رصيدك الحالي: ${newBalance} ${user.currency || 'USD'}.`,
+    data: {
+      type: 'balance_deduct',
+      amount: String(parsedAmount),
+      balance: String(newBalance),
+    },
+  }).catch((err) => console.error('[deductBalance Push Error]:', err.message));
 
   return {
     user: user.toJSON(),

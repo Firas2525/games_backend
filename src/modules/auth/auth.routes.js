@@ -13,6 +13,7 @@ import {
 import { validate } from '../../middlewares/validate.middleware.js';
 import { registerSchema, loginSchema } from './auth.validation.js';
 import { authenticate } from '../../middlewares/auth.middleware.js';
+import { updateMyProfile } from '../users/users.controller.js';
 
 const router = Router();
 
@@ -25,5 +26,7 @@ router.post('/2fa/enable', authenticate, enable2faHandler);
 router.post('/2fa/disable', authenticate, disable2faHandler);
 router.post('/admin/login', validate(loginSchema), adminLoginHandler);
 router.get('/me', authenticate, getMe);
+router.patch('/profile', authenticate, updateMyProfile);
+router.put('/profile', authenticate, updateMyProfile);
 
 export default router;

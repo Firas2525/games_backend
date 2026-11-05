@@ -91,5 +91,39 @@ export const redeemCoinsHandler = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, result.message);
 });
 
+export const updateMyProfile = asyncHandler(async (req, res) => {
+  const userId = req.user._id || req.user.id;
+  const { name, phone, avatar } = req.body;
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return ApiResponse.error(res, 'المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (name !== undefined) {
+    const trimmed = String(name).trim();
+    if (trimmed.length < 2) {
+      return ApiResponse.error(res, 'يجب أن يتكون الاسم من حرفين على الأقل', HTTP_STATUS.BAD_REQUEST);
+    }
+    if (trimmed.length > 50) {
+      return ApiResponse.error(res, 'لا يمكن أن يتجاوز الاسم 50 حرفاً', HTTP_STATUS.BAD_REQUEST);
+    }
+    user.name = trimmed;
+  }
+
+  if (phone !== undefined) {
+    user.phone = String(phone).trim();
+  }
+
+  if (avatar !== undefined) {
+    user.avatar = String(avatar).trim();
+  }
+
+  await user.save();
+
+  const updatedUser = await User.findById(userId);
+  return ApiResponse.success(res, updatedUser, 'تم تحديث بيانات الحساب بنجاح ✅');
+});
+
 
 

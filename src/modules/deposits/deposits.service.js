@@ -6,6 +6,7 @@ import { Transaction } from '../users/transactions.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
+import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
 
 const DEFAULT_METHODS = [
   {
@@ -322,6 +323,17 @@ export const createDepositRequest = async ({
     status: 'pending',
   });
 
+  // Notify Admins about new deposit request
+  sendAdminNotification({
+    title: 'طلب إيداع جديد 💰',
+    body: `أرسل الزبون ${user.name} طلب إيداع بقيمة ${cleanAmount} ${method.currency} عبر ${method.title}.`,
+    data: {
+      type: 'deposit_request',
+      depositId: String(deposit._id),
+      operationNumber: cleanOperation,
+    },
+  }).catch((err) => console.error('[Deposit Admin Notification Error]:', err.message));
+
   return deposit.toJSON();
 };
 
@@ -443,6 +455,8 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
   // Record audit transaction
   const acceptNote = (deposit.sourceCurrency === 'SYP' && deposit.creditCurrency === 'USD')
     ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ل.س = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
+    : (deposit.sourceCurrency === 'USD' && deposit.creditCurrency === 'SYP')
+    ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} $ = معادل ${creditAmount} ل.س (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
     : `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`;
 
   const transaction = await Transaction.create({
@@ -458,6 +472,17 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
 
   deposit.transactionId = transaction._id;
   await deposit.save();
+
+  // Notify User about deposit approval
+  sendDirectUserNotification(deposit.userId, {
+    title: 'تمت الموافقة على طلب الإيداع ✅',
+    body: `تمت إضافة ${creditAmount} ${deposit.creditCurrency === 'SYP' ? 'ل.س' : '$'} إلى محفظتك بنجاح! رصيدك الحالي: ${newBal} ${deposit.creditCurrency === 'SYP' ? 'ل.س' : '$'}.`,
+    data: {
+      type: 'deposit_accepted',
+      depositId: String(deposit._id),
+      amount: String(creditAmount),
+    },
+  }).catch((err) => console.error('[User Deposit Accepted Push Error]:', err.message));
 
   return {
     ok: true,
@@ -498,6 +523,17 @@ export const rejectDeposit = async ({ depositId, rejectionReason, adminId, admin
   deposit.processedAt = new Date();
   deposit.processedBy = adminEmail || String(adminId || 'admin');
   await deposit.save();
+
+  // Notify User about deposit rejection
+  sendDirectUserNotification(deposit.userId, {
+    title: 'تم رفض طلب الإيداع ❌',
+    body: `عذراً، تم رفض طلب الإيداع بقيمة ${deposit.amount} ${deposit.sourceCurrency}. السبب: ${cleanReason}`,
+    data: {
+      type: 'deposit_rejected',
+      depositId: String(deposit._id),
+      reason: cleanReason,
+    },
+  }).catch((err) => console.error('[User Deposit Rejected Push Error]:', err.message));
 
   return {
     ok: true,

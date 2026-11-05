@@ -14,6 +14,7 @@ import {
   updateFcmToken,
   getCoinsInfoHandler,
   redeemCoinsHandler,
+  updateMyProfile,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -32,6 +33,10 @@ router.get('/me/financial-summary', authenticate, getMyFinancialSummary);
 // Coins / Cashback system routes
 router.get('/coins/info', authenticate, getCoinsInfoHandler);
 router.post('/coins/redeem', authenticate, redeemCoinsHandler);
+
+// Profile management
+router.patch('/me/profile', authenticate, updateMyProfile);
+router.put('/me/profile', authenticate, updateMyProfile);
 
 // Admin-only routes
 router.use(authenticate, authorize(ROLES.ADMIN));

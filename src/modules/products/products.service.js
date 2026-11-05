@@ -359,14 +359,14 @@ export const autoSyncOnStartup = async () => {
     const result = await syncAllProducts();
     console.log('✅ [AutoSync] Sync completed successfully:', result);
 
-    // Auto-migrate any custom products created with '$' or null to 'BOTH' so all users see them
+    // Ensure custom products display '$' currency instead of internal 'BOTH'
     try {
       const customMigrate = await Product.updateMany(
-        { source: 'custom', currency: { $in: ['$', 'USD', null] } },
-        { $set: { currency: 'BOTH' } }
+        { source: 'custom', currency: { $in: ['BOTH', 'ALL', 'both', 'all', null, ''] } },
+        { $set: { currency: '$' } }
       );
       if (customMigrate.modifiedCount > 0) {
-        console.log(`✅ [AutoSync] Migrated ${customMigrate.modifiedCount} custom products to 'BOTH' currencies.`);
+        console.log(`✅ [AutoSync] Cleaned ${customMigrate.modifiedCount} custom products currency to $.`);
       }
     } catch (_) {}
   } catch (err) {
@@ -402,6 +402,14 @@ export const getCategoryProfitMap = async () => {
 
 export const resolveProductProfitPercentage = (product, globalProfit, catMap = {}, subCatMap = {}) => {
   if (product) {
+    if (product.source === 'custom') {
+      const cost = Number(product.originalPrice ?? 0);
+      const selling = Number(product.sellingPrice ?? product.price ?? cost);
+      if (cost > 0 && selling >= cost) {
+        return Number((((selling - cost) / cost) * 100).toFixed(2));
+      }
+      return 0;
+    }
     const subId = product.subCategoryId ? product.subCategoryId.toString() : null;
     if (subId && subCatMap[subId] !== undefined) {
       return subCatMap[subId];
@@ -473,17 +481,21 @@ export const getAdminProducts = async (query = {}) => {
   const { catMap, subCatMap } = await getCategoryProfitMap();
 
   const mappedProducts = products.map((p) => {
+    const isCustom = p.source === 'custom';
     const baseCost = p.originalPrice && p.originalPrice > 0 ? p.originalPrice : (p.price || 0);
     const effectiveProfit = resolveProductProfitPercentage(p, globalProfitPercentage, catMap, subCatMap);
-    const calculatedPrice = effectiveProfit > 0
-      ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-      : baseCost;
+    const calculatedPrice = isCustom
+      ? calcSmartPrice(p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price || baseCost))
+      : (effectiveProfit > 0
+          ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
+          : baseCost);
     const discountPercent = p.discountPercent || 0;
     const finalPrice = discountPercent > 0
       ? calcSmartPrice(calculatedPrice * (1 - discountPercent / 100))
       : calculatedPrice;
     return {
       ...p,
+      currency: (p.currency === 'BOTH' || p.currency === 'ALL' || !p.currency) ? '$' : p.currency,
       costPrice: baseCost,
       calculatedPrice,
       priceBeforeDiscount: calculatedPrice,
@@ -694,7 +706,7 @@ export const buildCurrencyProductFilter = (currencyStr) => {
             },
             {
               source: 'custom',
-              currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] },
+              // All custom products visible and converted for SYP
             },
           ],
         },
@@ -1265,8 +1277,22 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     'id _id name image price sellingPrice originalPrice currency isAvailable isVisible subCategoryId subCategoryName category source'
   ).lean();
 
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
+  const settings = await getSettings();
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
   const productsBySubId = {};
   for (const p of products) {
+    if (p.currency === 'BOTH' || p.currency === 'ALL' || !p.currency) {
+      p.currency = '$';
+    }
+    if (isUserSyp) {
+      if (p.source === 'custom' && (p.currency === '$' || p.currency === 'USD' || !p.currency || p.currency === 'BOTH' || p.currency === 'ALL')) {
+        p.price = Math.round((p.price || 0) * exchangeRate);
+        if (p.sellingPrice) p.sellingPrice = Math.round(p.sellingPrice * exchangeRate);
+        if (p.originalPrice) p.originalPrice = Math.round(p.originalPrice * exchangeRate);
+      }
+      p.currency = '\u0644.\u0633';
+    }
     let sId = p.subCategoryId?.toString();
     if (!sId && p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
       sId = subCategoryNameMap[p.subCategoryName.trim().toLowerCase()];
@@ -1309,7 +1335,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       canDelete: directCount === 0 && childCount === 0,
       products: scProducts,
       startingPrice,
-      currency: scProducts.length > 0 ? scProducts[0].currency : (userCurrency === 'SYP' ? 'ل.س' : '$'),
+      currency: isUserSyp ? 'ل.س' : (scProducts.length > 0 ? scProducts[0].currency : '$'),
     };
   });
 
@@ -1631,31 +1657,55 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   const settings = await getSettings();
   const globalProfitPercentage = settings.profitPercentage || 0;
   const { catMap, subCatMap } = await getCategoryProfitMap();
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
   const products = await Product.find(filter).sort({ category: 1, name: 1 });
   const mappedProducts = products.map((p) => {
     const doc = p.toObject ? p.toObject() : { ...p };
+    const isCustom = doc.source === 'custom';
     const effectiveProfit = resolveProductProfitPercentage(doc, globalProfitPercentage, catMap, subCatMap);
     const baseCost =
-      doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
+      doc.originalPrice && doc.originalPrice > 0
+        ? doc.originalPrice
+        : doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
         ? doc.sellingPrice
         : doc.price && doc.price > 0
         ? doc.price
-        : doc.originalPrice || 0;
-    const priceBeforeDiscount =
-      effectiveProfit > 0
-        ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-        : baseCost;
+        : 0;
+    const priceBeforeDiscount = isCustom
+      ? calcSmartPrice(doc.sellingPrice && doc.sellingPrice > 0 ? doc.sellingPrice : (doc.price || baseCost))
+      : (effectiveProfit > 0
+          ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
+          : baseCost);
     const discountPercent = doc.discountPercent || 0;
     const finalPrice =
       discountPercent > 0
         ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
         : priceBeforeDiscount;
+
+    let finalCurrency = (doc.currency === 'BOTH' || doc.currency === 'ALL' || !doc.currency) ? '$' : doc.currency;
+    let convertedCost = baseCost;
+    let convertedPriceBeforeDiscount = priceBeforeDiscount;
+    let convertedFinalPrice = finalPrice;
+
+    if (isUserSyp) {
+      finalCurrency = '\u0644.\u0633';
+      if (isCustom && (doc.currency === '$' || doc.currency === 'USD' || !doc.currency || doc.currency === 'BOTH' || doc.currency === 'ALL')) {
+        convertedCost = Math.round(baseCost * exchangeRate);
+        convertedPriceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
+        convertedFinalPrice = discountPercent > 0
+          ? Math.round(convertedPriceBeforeDiscount * (1 - discountPercent / 100))
+          : convertedPriceBeforeDiscount;
+      }
+    }
+
     return {
       ...doc,
-      costPrice: baseCost,
-      price: finalPrice,
-      priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
+      currency: finalCurrency,
+      costPrice: convertedCost,
+      price: convertedFinalPrice,
+      priceBeforeDiscount: discountPercent > 0 ? convertedPriceBeforeDiscount : null,
       discountPercent,
       profitPercentage: effectiveProfit,
     };
@@ -1769,7 +1819,7 @@ export const getProductDetails = async (id, userCurrency = null) => {
         discountPercent,
         costPrice: baseCost,
         originalPrice: baseCost,
-        currency: pkg.currency || (pkg.source === 'roya_syp' ? 'ل.س' : '$'),
+        currency: isUserSyp ? '\u0644.\u0633' : (pkg.currency || '$'),
         params: (pkg.requiredFields || []).map(
           (f) => f.label || f.key || 'ايدي اللاعب'
         ),
@@ -1867,7 +1917,7 @@ export const getProductDetails = async (id, userCurrency = null) => {
             discountPercent,
             costPrice: baseCost,
             originalPrice: product.originalPrice || baseCost,
-            currency: '$',
+            currency: isUserSyp ? '\u0644.\u0633' : '$',
             params:
               Array.isArray(pkg.params) && pkg.params.length > 0
                 ? pkg.params
@@ -1892,6 +1942,7 @@ export const getProductDetails = async (id, userCurrency = null) => {
   }
 
   // 3. Fallback for stored products
+  const isCustom = product.source === 'custom';
   const fallbackBaseCost =
     product.originalPrice && product.originalPrice > 0
       ? product.originalPrice
@@ -1899,10 +1950,11 @@ export const getProductDetails = async (id, userCurrency = null) => {
       ? product.sellingPrice
       : product.price || 0;
 
-  const fallbackPriceBeforeDiscount =
-    profitPercentage > 0
-      ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
-      : fallbackBaseCost;
+  const fallbackPriceBeforeDiscount = isCustom
+    ? calcSmartPrice(product.sellingPrice && product.sellingPrice > 0 ? product.sellingPrice : (product.price || fallbackBaseCost))
+    : (profitPercentage > 0
+        ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
+        : fallbackBaseCost);
 
   const discountPercent = product.discountPercent || 0;
   const fallbackUserPrice =
@@ -1910,11 +1962,30 @@ export const getProductDetails = async (id, userCurrency = null) => {
       ? calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100))
       : fallbackPriceBeforeDiscount;
 
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+  let resolvedCustomCurrency = (product.currency === 'BOTH' || product.currency === 'ALL' || !product.currency) ? '$' : product.currency;
+  let customBaseCost = fallbackBaseCost;
+  let customPriceBefore = fallbackPriceBeforeDiscount;
+  let customUserPrice = fallbackUserPrice;
+
+  if (isUserSyp) {
+    resolvedCustomCurrency = '\u0644.\u0633';
+    if (isCustom && (product.currency === '$' || product.currency === 'USD' || !product.currency || product.currency === 'BOTH' || product.currency === 'ALL')) {
+      customBaseCost = Math.round(fallbackBaseCost * exchangeRate);
+      customPriceBefore = Math.round(fallbackPriceBeforeDiscount * exchangeRate);
+      customUserPrice = discountPercent > 0
+        ? Math.round(customPriceBefore * (1 - discountPercent / 100))
+        : customPriceBefore;
+    }
+  }
   return {
     product: {
       ...(product.toObject ? product.toObject() : product),
-      price: fallbackUserPrice,
-      priceBeforeDiscount: discountPercent > 0 ? fallbackPriceBeforeDiscount : null,
+      currency: resolvedCustomCurrency,
+      price: customUserPrice,
+      priceBeforeDiscount: discountPercent > 0 ? customPriceBefore : null,
       discountPercent,
     },
     source: product.source,
@@ -1925,13 +1996,13 @@ export const getProductDetails = async (id, userCurrency = null) => {
         name: cleanName(product.name),
         fullName: product.name,
         description: product.category,
-        price: fallbackUserPrice,
-        priceBeforeDiscount: discountPercent > 0 ? fallbackPriceBeforeDiscount : null,
+        price: customUserPrice,
+        priceBeforeDiscount: discountPercent > 0 ? customPriceBefore : null,
         discountPercent,
-        costPrice: fallbackBaseCost,
-        originalPrice: fallbackBaseCost,
-        currency: product.currency || '$',
-        params: product.requiredFields.map((f) => f.label || f.key || 'ايدي اللاعب'),
+        costPrice: customBaseCost,
+        originalPrice: customBaseCost,
+        currency: resolvedCustomCurrency,
+        params: product.requiredFields.map((f) => f.label || f.key || 'Player_ID'),
         categoryName: product.category,
         available: product.isAvailable,
         minCount: product.minCount || 1,
@@ -1942,7 +2013,6 @@ export const getProductDetails = async (id, userCurrency = null) => {
   };
 };
 
-// 12. Batch or Single Product Discount Update
 export const updateProductsDiscount = async (productIds, discountPercent) => {
   if (!Array.isArray(productIds) || productIds.length === 0) {
     throw new ApiError('يرجى تحديد المنتجات المراد تعديل نسبة الخصم لها', HTTP_STATUS.BAD_REQUEST);
@@ -2035,7 +2105,7 @@ export const createCustomProduct = async (data) => {
 
   const externalId = `CUST-${Date.now().toString(36)}-${Math.floor(100 + Math.random() * 900)}`;
 
-  let resolvedCurrency = 'BOTH';
+  let resolvedCurrency = '$';
   const currNorm = (currency || '').trim().toUpperCase();
   if (currNorm === 'SYP' || currNorm === 'ل.س' || currNorm === 'ليرة') {
     resolvedCurrency = 'ل.س';
@@ -2111,7 +2181,7 @@ export const updateCustomProduct = async (id, data) => {
     } else if (currNorm === 'USD' || currNorm === '$') {
       product.currency = '$';
     } else {
-      product.currency = 'BOTH';
+      product.currency = '$';
     }
   }
   if (image !== undefined) product.image = image.trim();

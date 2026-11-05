@@ -1,5 +1,6 @@
 import { Notification } from './notifications.model.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { sendBroadcastNotificationToUsers } from '../../config/firebaseAdmin.js';
 
 export const getNotifications = async (req, res, next) => {
   try {
@@ -32,7 +33,20 @@ export const createNotification = async (req, res, next) => {
       isActive: true,
     });
 
-    return ApiResponse.success(res, notification, 'تم إرسال الإشعار بنجاح', 201);
+    // Send real live push notification with sound & vibration to all users
+    sendBroadcastNotificationToUsers({
+      title: title.trim(),
+      body: description.trim(),
+      data: {
+        notificationId: String(notification._id),
+        type: type || 'broadcast',
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+      },
+    }).catch((err) => {
+      console.error('[Push Notifications Error]:', err.message);
+    });
+
+    return ApiResponse.success(res, notification, 'تم إرسال الإشعار بنجاح وإيصاله لجميع المستخدمين', 201);
   } catch (error) {
     next(error);
   }

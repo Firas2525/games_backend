@@ -8,7 +8,7 @@ import { SubCategory } from '../products/subcategories.model.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-import { sendAdminNotification } from '../../config/firebaseAdmin.js';
+import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
 import {
   dispatchProviderOrder,
   checkExternalOrderStatus,
@@ -147,7 +147,8 @@ export const executePurchase = async ({
     currency === 'ل.س' ||
     (currency || '').toUpperCase() === 'SYP';
 
-  if (isUserSyp && !isProductSyp) {
+  const isCustomProduct = source === 'custom' || product?.source === 'custom' || activeItem?.source === 'custom';
+  if (isUserSyp && !isProductSyp && !isCustomProduct) {
     throw new ApiError(
       'عذراً، حسابك بالليرة السورية ولا يمكنك شراء منتجات من مصدر الدولار ($)',
       HTTP_STATUS.BAD_REQUEST
@@ -163,9 +164,18 @@ export const executePurchase = async ({
   const effectiveCurrency = isUserSyp ? 'ل.س' : '$';
 
   // 2. Resolve true base cost and selling price
+  const isCustom = source === 'custom' || product?.source === 'custom' || activeItem?.source === 'custom';
   const settings = await getSettings();
   let profitPercentage = settings.profitPercentage || 0;
-  if (product) {
+  if (isCustom) {
+    const cost = Number(activeItem?.originalPrice ?? product?.originalPrice ?? 0);
+    const selling = Number(activeItem?.sellingPrice ?? activeItem?.price ?? product?.sellingPrice ?? product?.price ?? cost);
+    if (cost > 0 && selling >= cost) {
+      profitPercentage = Number((((selling - cost) / cost) * 100).toFixed(2));
+    } else {
+      profitPercentage = 0;
+    }
+  } else if (product) {
     if (product.subCategoryId) {
       const subCat = await SubCategory.findById(product.subCategoryId).select('profitPercentage').lean();
       if (subCat && subCat.profitPercentage !== null && subCat.profitPercentage !== undefined && !isNaN(subCat.profitPercentage)) {
@@ -183,20 +193,29 @@ export const executePurchase = async ({
 
   const incomingClientPrice = Number(clientBasePrice || userPrice || price || amount || 0);
 
-  const baseCost =
-    activeItem?.originalPrice && activeItem.originalPrice > 0
-      ? activeItem.originalPrice
-      : activeItem?.sellingPrice && activeItem.sellingPrice > 0
-        ? activeItem.sellingPrice
-        : activeItem?.price && activeItem.price > 0
-          ? activeItem.price
-          : (incomingClientPrice > 0 ? incomingClientPrice : 0);
+  const baseCost = isCustom
+    ? Number(activeItem?.originalPrice ?? product?.originalPrice ?? 0)
+    : (activeItem?.originalPrice && activeItem.originalPrice > 0
+        ? activeItem.originalPrice
+        : activeItem?.sellingPrice && activeItem.sellingPrice > 0
+          ? activeItem.sellingPrice
+          : activeItem?.price && activeItem.price > 0
+            ? activeItem.price
+            : (incomingClientPrice > 0 ? incomingClientPrice : 0));
 
   // Expected price with profit (Preserving full 8 decimals for fractional unit prices < 1 to prevent rounding errors)
-  const priceBeforeDiscount =
-    profitPercentage > 0
-      ? (baseCost >= 1 ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4)) : Number((baseCost * (1 + profitPercentage / 100)).toFixed(8)))
-      : baseCost;
+  const priceBeforeDiscount = isCustom
+    ? Number(activeItem?.sellingPrice ?? activeItem?.price ?? product?.sellingPrice ?? product?.price ?? baseCost)
+    : (profitPercentage > 0
+        ? (baseCost >= 1 ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4)) : Number((baseCost * (1 + profitPercentage / 100)).toFixed(8)))
+        : baseCost);
+
+  // If user is SYP and custom product was created in USD, convert to SYP using exchange rate:
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  if (isUserSyp && isCustom && !isProductSyp) {
+    baseCost = Math.round(baseCost * exchangeRate);
+    priceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
+  }
 
   const calculatedSellingPrice =
     discountPercent > 0
@@ -210,7 +229,7 @@ export const executePurchase = async ({
 
   // Unit cost from provider
   let unitCost = baseCost;
-  if (unitCost <= 0 && resolvedUnitSellingPrice > 0) {
+  if (!isCustom && unitCost <= 0 && resolvedUnitSellingPrice > 0) {
     unitCost =
       profitPercentage > 0
         ? (resolvedUnitSellingPrice >= 1 ? Number((resolvedUnitSellingPrice / (1 + profitPercentage / 100)).toFixed(4)) : Number((resolvedUnitSellingPrice / (1 + profitPercentage / 100)).toFixed(8)))
@@ -502,6 +521,15 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   } catch (txErr) {
     console.error('[refundOrderWallet] Transaction logging failed (non-fatal):', txErr.message);
   }
+  // Notify User about refund
+  sendDirectUserNotification(order.userId, {
+    title: 'تحديث بشأن طلبك: تم استرجاع المبلغ ↩️',
+    body: `تم إلغاء/فشل طلب (${order.productName || 'طلب شحن'}) واسترجاع المبلغ (${refundAmount} ${normalizedCurrency}) إلى محفظتك.`,
+    data: {
+      type: 'order_refunded',
+      orderId: String(order.orderId || order._id),
+    },
+  }).catch((err) => console.error('[Refund Push Error]:', err.message));
 
   return true;
 };
@@ -552,6 +580,14 @@ export const syncOrdersBatch = async (ordersList) => {
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
             await order.save();
+            sendDirectUserNotification(order.userId, {
+              title: 'تم تنفيذ طلبك بنجاح! 🎮',
+              body: `تم إكمال طلب شحن (${order.productName}) بنجاح. شكراً لتعاملك معنا!`,
+              data: {
+                type: 'order_completed',
+                orderId: String(order.orderId || order._id),
+              },
+            }).catch((err) => console.error('[Batch Sync Complete Push Error]:', err.message));
             updatedCount++;
           }
         }
@@ -577,6 +613,14 @@ export const syncOrdersBatch = async (ordersList) => {
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
             await order.save();
+            sendDirectUserNotification(order.userId, {
+              title: 'تم تنفيذ طلبك بنجاح! 🎮',
+              body: `تم إكمال طلب شحن (${order.productName}) بنجاح. شكراً لتعاملك معنا!`,
+              data: {
+                type: 'order_completed',
+                orderId: String(order.orderId || order._id),
+              },
+            }).catch((err) => console.error('[Batch Sync Complete Push Error]:', err.message));
             updatedCount++;
           }
         }
@@ -599,6 +643,14 @@ export const syncOrdersBatch = async (ordersList) => {
           order.completedAt = order.completedAt || new Date();
           if (checkResult.rawData) order.providerResponse = checkResult.rawData;
           await order.save();
+            sendDirectUserNotification(order.userId, {
+              title: 'تم تنفيذ طلبك بنجاح! 🎮',
+              body: `تم إكمال طلب شحن (${order.productName}) بنجاح. شكراً لتعاملك معنا!`,
+              data: {
+                type: 'order_completed',
+                orderId: String(order.orderId || order._id),
+              },
+            }).catch((err) => console.error('[Batch Sync Complete Push Error]:', err.message));
           updatedCount++;
         }
       }
@@ -644,13 +696,219 @@ export const getUserOrders = async (userId) => {
 
 export const getAllOrdersAdmin = async (query = {}) => {
   const filter = {};
-  if (query.userId) filter.userId = query.userId;
-  if (query.status) filter.status = query.status;
-  if (query.source) filter.source = query.source;
 
-  return await Order.find(filter)
-    .populate('userId', 'name email avatar balance')
-    .sort({ createdAt: -1 });
+  // 1. Filter by specific user ID
+  if (query.userId && mongoose.isValidObjectId(query.userId)) {
+    filter.userId = query.userId;
+  }
+
+  // 2. Filter by status
+  if (query.status && query.status !== 'all') {
+    if (query.status === 'pending') {
+      filter.status = { $in: ['pending', 'processing'] };
+    } else if (query.status === 'failed' || query.status === 'rejected') {
+      filter.status = { $in: ['failed', 'cancelled'] };
+    } else {
+      filter.status = query.status;
+    }
+  }
+
+  // 3. Filter by source (e.g. 'custom', 'sw_games', 'roya_usd', 'roya_syp', 'brand1card', etc.)
+  if (query.source && query.source !== 'all') {
+    if (query.source === 'custom') {
+      filter.$or = [
+        { source: 'custom' },
+        { 'providerPayload.isManual': true },
+        { 'providerPayload.provider': 'مزودي الخاص' },
+        { source: { $in: ['', null] } },
+      ];
+    } else {
+      filter.source = query.source;
+    }
+  }
+
+  // 4. Filter by Date (today, yesterday, this_week, this_month, YYYY-MM-DD, or startDate & endDate)
+  if (query.date && query.date !== 'all') {
+    const now = new Date();
+    if (query.date === 'today') {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: start, $lte: end };
+    } else if (query.date === 'yesterday') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 1);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setDate(now.getDate() - 1);
+      end.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: start, $lte: end };
+    } else if (query.date === 'this_week' || query.date === 'last7days') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - 6);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: start, $lte: end };
+    } else if (query.date === 'this_month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      filter.createdAt = { $gte: start, $lte: end };
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(query.date)) {
+      const [y, m, d] = query.date.split('-').map(Number);
+      const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+      const end = new Date(y, m - 1, d, 23, 59, 59, 999);
+      filter.createdAt = { $gte: start, $lte: end };
+    }
+  } else if (query.startDate && query.endDate) {
+    const start = new Date(query.startDate);
+    const end = new Date(query.endDate);
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      filter.createdAt = { $gte: start, $lte: end };
+    }
+  }
+
+  // 5. Search by orderId, productName, targetId, providerOrderId, user (name, phone, email, userCode)
+  if (query.search && query.search.trim()) {
+    const s = query.search.trim();
+    const matchedUsers = await User.find({
+      $or: [
+        { name: { $regex: s, $options: 'i' } },
+        { email: { $regex: s, $options: 'i' } },
+        { phone: { $regex: s, $options: 'i' } },
+        { userCode: { $regex: s, $options: 'i' } },
+      ],
+    })
+      .select('_id')
+      .lean();
+
+    const matchedUserIds = matchedUsers.map((u) => u._id);
+
+    const searchConditions = [
+      { orderId: { $regex: s, $options: 'i' } },
+      { productName: { $regex: s, $options: 'i' } },
+      { targetId: { $regex: s, $options: 'i' } },
+      { providerOrderId: { $regex: s, $options: 'i' } },
+    ];
+
+    if (matchedUserIds.length > 0) {
+      searchConditions.push({ userId: { $in: matchedUserIds } });
+    }
+
+    if (filter.$or) {
+      filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
+      delete filter.$or;
+    } else {
+      filter.$or = searchConditions;
+    }
+  }
+
+  // 6. Pagination
+  const page = parseInt(query.page, 10) || 1;
+  const limit = query.limit === 'all' ? 1000 : (parseInt(query.limit, 10) || 100);
+  const skip = (page - 1) * limit;
+
+  // 7. Base filter for status counts (without status constraint)
+  const baseFilterWithoutStatus = { ...filter };
+  delete baseFilterWithoutStatus.status;
+
+  const [orders, total, statusAgg, financialAgg] = await Promise.all([
+    Order.find(filter)
+      .populate('userId', 'name email phone avatar balance currency userCode')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    Order.countDocuments(filter),
+    Order.aggregate([
+      { $match: baseFilterWithoutStatus },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]),
+    Order.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: {
+            isSyp: {
+              $or: [
+                { $eq: ['$currency', 'SYP'] },
+                { $eq: ['$currency', 'syp'] },
+                { $eq: ['$currency', 'ل.س'] },
+              ],
+            },
+          },
+          totalRevenue: { $sum: '$userPrice' },
+          totalCost: { $sum: '$costPrice' },
+          totalProfit: { $sum: '$profit' },
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const counts = {
+    all: 0,
+    pending: 0,
+    processing: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  };
+
+  for (const item of statusAgg) {
+    if (item._id && counts[item._id] !== undefined) {
+      counts[item._id] = item.count;
+    }
+    counts.all += item.count;
+  }
+
+  const stats = {
+    usd: { revenue: 0, cost: 0, profit: 0, count: 0 },
+    syp: { revenue: 0, cost: 0, profit: 0, count: 0 },
+  };
+
+  for (const f of financialAgg) {
+    if (f._id?.isSyp) {
+      stats.syp = {
+        revenue: Math.round(f.totalRevenue || 0),
+        cost: Math.round(f.totalCost || 0),
+        profit: Math.round(f.totalProfit || 0),
+        count: f.count || 0,
+      };
+    } else {
+      stats.usd = {
+        revenue: Number((f.totalRevenue || 0).toFixed(2)),
+        cost: Number((f.totalCost || 0).toFixed(2)),
+        profit: Number((f.totalProfit || 0).toFixed(2)),
+        count: f.count || 0,
+      };
+    }
+  }
+
+  const enrichedOrders = orders.map(enrichOrderWithInvoiceMeta);
+
+  return {
+    orders: enrichedOrders,
+    total,
+    pagination: {
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+      total,
+    },
+    counts,
+    stats,
+  };
+
+
+
+
+
+
+
+
 };
 
 export const checkSingleOrder = async (orderId) => {
@@ -918,6 +1176,16 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
   };
 
   await order.save();
+  // Notify User about custom order completion
+  sendDirectUserNotification(order.userId, {
+    title: 'تم تنفيذ طلبك بنجاح! 🎮',
+    body: `تم إكمال طلب شحن (${order.productName}) بنجاح.${adminNote ? ' ملاحظة: ' + adminNote : ' شكراً لتعاملك معنا!'}`,
+    data: {
+      type: 'order_completed',
+      orderId: String(order.orderId || order._id),
+    },
+  }).catch((err) => console.error('[Order Complete Push Error]:', err.message));
+
   return enrichOrderWithInvoiceMeta(order);
 };
 
@@ -937,7 +1205,7 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
 
   // If already refunded and marked, return cleanly to prevent false error alerts
   if (order.refunded && (order.status === 'failed' || order.status === 'cancelled')) {
-    return order.toJSON ? order.toJSON() : order;
+  return order.toJSON ? order.toJSON() : order;
   }
 
   const actionText = isReject ? 'رفض الطلب' : 'إلغاء الطلب';
@@ -956,6 +1224,17 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
   };
 
   await order.save();
+  // Notify User about custom order cancellation/rejection
+  sendDirectUserNotification(order.userId, {
+    title: isReject ? 'تحديث بشأن طلبك: تم رفض الطلب ⚠️' : 'تحديث بشأن طلبك: تم إلغاء الطلب ↩️',
+    body: `تم ${isReject ? 'رفض' : 'إلغاء'} طلب (${order.productName}) وإرجاع المبلغ (${order.userPrice} ${order.currency}) لمحفظتك.${reason ? ' السبب: ' + reason : ''}`,
+    data: {
+      type: 'order_refunded',
+      orderId: String(order.orderId || order._id),
+      reason: reason ? String(reason) : '',
+    },
+  }).catch((err) => console.error('[Order Refund Push Error]:', err.message));
+
   return order.toJSON ? order.toJSON() : order;
 };
 
@@ -1002,6 +1281,14 @@ export const handleRoyaWebhook = async (data = {}) => {
     order.providerResponse = data;
     await order.save();
     console.log(`[Roya Webhook] Order #${order.orderId} successfully completed.`);
+    sendDirectUserNotification(order.userId, {
+      title: 'تم تنفيذ طلبك بنجاح! 🎮',
+      body: `تم إكمال طلب شحن (${order.productName}) بنجاح عبر المزود. شكراً لتعاملك معنا!`,
+      data: {
+        type: 'order_completed',
+        orderId: String(order.orderId || order._id),
+      },
+    }).catch((err) => console.error('[Roya Webhook Complete Push Error]:', err.message));
     return { ok: true, status: 'completed' };
   }
 
