@@ -294,66 +294,12 @@ export const sendBroadcastNotificationToUsers = async ({ title, body, data = {} 
       },
     };
 
-    let topicResponse = null;
-    let directDeliveryCount = 0;
-    let errors = [];
+    const topicResponse = await admin.messaging().send(message);
+    console.log('[FirebaseAdmin] Broadcast notification delivered cleanly to all_users topic:', topicResponse);
 
-    // 1. Send to 'all_users' topic
-    try {
-      topicResponse = await admin.messaging().send(message);
-      console.log('[FirebaseAdmin] Notification sent to all_users topic:', topicResponse);
-    } catch (tErr) {
-      errors.push(`Topic error: ${tErr.message}`);
-      console.error('[FirebaseAdmin] Error sending to all_users topic:', tErr.message);
-    }
-
-    // 2. Also send to 'users' topic
-    try {
-      await admin.messaging().send({ ...message, topic: 'users' });
-    } catch (_) {}
-
-    // 3. Direct delivery to active user tokens
-    try {
-      const activeUsers = await User.find({
-        role: { $ne: 'admin' },
-        fcmToken: { $exists: true, $nin: ['', null] },
-      }).select('fcmToken').lean();
-
-      const tokens = [...new Set(activeUsers.map((u) => u.fcmToken).filter(Boolean))];
-      if (tokens.length > 0) {
-        const batchSize = 500;
-        for (let i = 0; i < tokens.length; i += batchSize) {
-          const batch = tokens.slice(i, i + batchSize);
-          const multiRes = await admin.messaging().sendEachForMulticast({
-            tokens: batch,
-            notification: { title, body },
-            data: stringifiedData,
-            android: {
-              priority: 'high',
-              notification: {
-                sound: 'default',
-                channelId: 'user_notifications',
-                priority: 'max',
-                defaultVibrateTimings: true,
-                defaultSound: true,
-              },
-            },
-          });
-          directDeliveryCount += multiRes.successCount;
-        }
-        console.log(`[FirebaseAdmin] Direct token multicast sent to ${tokens.length} users. Delivered: ${directDeliveryCount}`);
-      }
-    } catch (tokErr) {
-      errors.push(`Direct user token error: ${tokErr.message}`);
-      console.error('[FirebaseAdmin] Error sending direct user tokens:', tokErr.message);
-    }
-
-    const isSuccess = Boolean(topicResponse || directDeliveryCount > 0);
     return {
-      success: isSuccess,
+      success: true,
       topicMessageId: topicResponse,
-      directDeliveryCount,
-      errors: errors.length > 0 ? errors : undefined,
     };
   } catch (error) {
     console.error('[FirebaseAdmin] Failed to send push notification to users:', error.message);
