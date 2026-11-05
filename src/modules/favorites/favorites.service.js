@@ -1,4 +1,4 @@
-﻿import mongoose from 'mongoose';
+import mongoose from 'mongoose';
 import { Favorite } from './favorites.model.js';
 import { Product } from '../products/products.model.js';
 import { ApiError } from '../../utils/apiError.js';
@@ -124,22 +124,24 @@ export const getUserFavorites = async (userId, userCurrency = null) => {
         ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
         : priceBeforeDiscount;
 
-    return {
-      ...doc,
-      id: doc._id.toString(),
     let finalCurrency = (doc.currency === 'BOTH' || doc.currency === 'ALL' || !doc.currency) ? '$' : doc.currency;
     let convertedCost = baseCost;
     let convertedPriceBeforeDiscount = priceBeforeDiscount;
     let convertedFinalPrice = finalPrice;
 
     if (isUserSyp && isCustom && (finalCurrency === '$' || finalCurrency === 'USD')) {
-      finalCurrency = 'Ù„.Ø³';
+      finalCurrency = 'ل.س';
       convertedCost = Math.round(baseCost * exchangeRate);
       convertedPriceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
       convertedFinalPrice = discountPercent > 0
         ? Math.round(convertedPriceBeforeDiscount * (1 - discountPercent / 100))
         : convertedPriceBeforeDiscount;
     }
+
+    return {
+      ...doc,
+      id: doc._id.toString(),
+      currency: finalCurrency,
       costPrice: convertedCost,
       price: convertedFinalPrice,
       priceBeforeDiscount: discountPercent > 0 ? convertedPriceBeforeDiscount : null,
