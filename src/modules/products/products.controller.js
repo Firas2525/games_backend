@@ -175,4 +175,14 @@ export const deleteCustom = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'تم حذف المنتج الخاص بنجاح');
 });
 
+export const updateCustomDetails = asyncHandler(async (req, res) => {
+  const result = await productsService.updateProductCustomDetails(req.params.id, req.body);
+  return ApiResponse.success(res, result, 'تم تحديث اسم وصورة المنتج بنجاح');
+});
+
+export const revertCustomDetails = asyncHandler(async (req, res) => {
+  const result = await productsService.revertProductCustomDetails(req.params.id, req.body);
+  return ApiResponse.success(res, result, 'تمت استعادة الاسم والصورة الأصلية للمزود بنجاح');
+});
+
 

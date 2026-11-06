@@ -27,6 +27,8 @@ import {
   createCustom,
   updateCustom,
   deleteCustom,
+  updateCustomDetails,
+  revertCustomDetails,
 } from './products.controller.js';
 import { authenticate, authorize, optionalAuthenticate } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
@@ -74,6 +76,8 @@ router.patch('/bulk-visibility', bulkVisibility);
 router.patch('/category-group', updateCategoryGroup);
 router.patch('/:id/toggle-visibility', toggleVisibility);
 router.patch('/:id/category', updateCategory);
+router.patch('/:id/custom-details', updateCustomDetails);
+router.post('/:id/revert-custom-details', revertCustomDetails);
 
 export default router;
 

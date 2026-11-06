@@ -68,6 +68,36 @@ const productSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    providerName: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    providerImage: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    customName: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    customImage: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    isNameOverridden: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    isImageOverridden: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     price: {
       type: Number,
       default: 0,

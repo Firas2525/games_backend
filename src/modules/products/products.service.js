@@ -145,7 +145,7 @@ export const fetchBrand1Card = async () => {
           const ipRes = await fetch('https://api.ipify.org?format=json');
           const ipData = await ipRes.json();
           console.warn(`🚨 [Brand One Card] IP NOT ALLOWED. Outgoing server IP is: ${ipData.ip}. Please whitelist this IP in the Brand One Card panel!`);
-        } catch (_) {}
+        } catch (_) { }
       }
       return [];
     }
@@ -243,22 +243,26 @@ export const syncAllProducts = async () => {
     };
   }
 
-  // Load existing overridden products so their mainCategory is NOT overwritten
-  const overridden = await Product.find({ isCategoryOverridden: true })
-    .select('source externalId')
+  // Load existing overridden products so their mainCategory/name/image are NOT overwritten
+  const overridden = await Product.find({
+    $or: [
+      { isCategoryOverridden: true },
+      { isNameOverridden: true },
+      { isImageOverridden: true },
+    ],
+  })
+    .select('source externalId isCategoryOverridden isNameOverridden isImageOverridden')
     .lean();
-  const overriddenSet = new Set(overridden.map((p) => `${p.source}:${p.externalId}`));
+  const overriddenMap = new Map(overridden.map((p) => [`${p.source}:${p.externalId}`, p]));
 
   // Batch operations: Visible by default so user sees items immediately!
   const operations = allNormalized.map((item) => {
-    const isOverridden = overriddenSet.has(`${item.source}:${item.externalId}`);
+    const existingOverride = overriddenMap.get(`${item.source}:${item.externalId}`);
     const updateDoc = {
-      name: item.name,
       category: item.category,
       price: item.price,
       originalPrice: item.originalPrice,
       currency: item.currency,
-      image: item.image,
       isAvailable: item.isAvailable,
       isVisible: true, // Visible by default like legacy site
       minCount: item.minCount,
@@ -267,10 +271,17 @@ export const syncAllProducts = async () => {
       requiredFields: item.requiredFields,
       sourceName: item.sourceName,
       rawPayload: item.rawPayload,
+      providerName: item.name,
+      providerImage: item.image,
     };
 
-    // Only update mainCategory if admin has not manually overridden it
-    if (!isOverridden) {
+    if (!existingOverride?.isNameOverridden) {
+      updateDoc.name = item.name;
+    }
+    if (!existingOverride?.isImageOverridden) {
+      updateDoc.image = item.image;
+    }
+    if (!existingOverride?.isCategoryOverridden) {
       updateDoc.mainCategory = item.mainCategory;
     }
 
@@ -281,6 +292,8 @@ export const syncAllProducts = async () => {
           $set: updateDoc,
           $setOnInsert: {
             isCategoryOverridden: false,
+            isNameOverridden: false,
+            isImageOverridden: false,
           },
         },
         upsert: true,
@@ -353,9 +366,9 @@ export const autoSyncOnStartup = async () => {
   try {
     console.log('🔄 [AutoSync] Starting catalog synchronization and categorization...');
     // Immediate deactivation of Syria Card products
-    await deactivateSyriaCardProducts().catch(() => {});
+    await deactivateSyriaCardProducts().catch(() => { });
     // Seed legacy admin overrides if present
-    await seedLegacyOverrides().catch(() => {});
+    await seedLegacyOverrides().catch(() => { });
     const result = await syncAllProducts();
     console.log('✅ [AutoSync] Sync completed successfully:', result);
 
@@ -368,7 +381,7 @@ export const autoSyncOnStartup = async () => {
       if (customMigrate.modifiedCount > 0) {
         console.log(`✅ [AutoSync] Cleaned ${customMigrate.modifiedCount} custom products currency to $.`);
       }
-    } catch (_) {}
+    } catch (_) { }
   } catch (err) {
     console.error('❌ [AutoSync] Failed on startup:', err.message);
   }
@@ -377,6 +390,10 @@ export const autoSyncOnStartup = async () => {
 // Helpers: Resolve category-specific profit percentage
 export const getCategoryProfitMap = async () => {
   try {
+    const cacheKey = 'cat_profit_maps';
+    const cached = serverCache.get(cacheKey);
+    if (cached) return cached;
+
     const [categories, subCategories] = await Promise.all([
       Category.find({}).select('key profitPercentage').lean(),
       SubCategory.find({}).select('_id profitPercentage').lean(),
@@ -393,7 +410,9 @@ export const getCategoryProfitMap = async () => {
         subCatMap[sc._id.toString()] = Number(sc.profitPercentage);
       }
     }
-    return { catMap, subCatMap };
+    const result = { catMap, subCatMap };
+    serverCache.set(cacheKey, result, 60);
+    return result;
   } catch (err) {
     console.warn('[getCategoryProfitMap] error:', err.message);
     return { catMap: {}, subCatMap: {} };
@@ -461,7 +480,15 @@ export const getAdminProducts = async (query = {}) => {
         ],
       });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
-      andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
+      const objId = new mongoose.Types.ObjectId(query.subCategoryId);
+      andClauses.push({
+        $or: [
+          { subCategoryId: objId },
+          { subCategoryId: String(query.subCategoryId) },
+        ],
+      });
+    } else {
+      andClauses.push({ subCategoryId: query.subCategoryId });
     }
   }
   if (query.search) {
@@ -480,9 +507,12 @@ export const getAdminProducts = async (query = {}) => {
     .sort({ category: 1, name: 1 })
     .lean();
 
-  const settings = await getSettings();
+  const [settings, profitMaps] = await Promise.all([
+    getSettings(),
+    getCategoryProfitMap(),
+  ]);
   const globalProfitPercentage = settings.profitPercentage || 0;
-  const { catMap, subCatMap } = await getCategoryProfitMap();
+  const { catMap, subCatMap } = profitMaps;
 
   const mappedProducts = products.map((p) => {
     const isCustom = p.source === 'custom';
@@ -491,8 +521,8 @@ export const getAdminProducts = async (query = {}) => {
     const calculatedPrice = isCustom
       ? calcSmartPrice(p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price || baseCost))
       : (effectiveProfit > 0
-          ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-          : baseCost);
+        ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
+        : baseCost);
     const discountPercent = p.discountPercent || 0;
     const finalPrice = discountPercent > 0
       ? calcSmartPrice(calculatedPrice * (1 - discountPercent / 100))
@@ -1092,8 +1122,8 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
         groupName = detectProductGroupName(p.name, p.category);
       }
       if (!groupName || groupName === 'عام' || groupName === 'عامة' || groupName === 'Uncategorized') {
-        groupName = (p.category && p.category.trim() && p.category !== 'عام') 
-          ? p.category.trim() 
+        groupName = (p.category && p.category.trim() && p.category !== 'عام')
+          ? p.category.trim()
           : (p.name && p.name.trim()) || 'عام';
       }
 
@@ -1623,7 +1653,15 @@ export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCate
 
 // 7. User: Get visible products grouped by Category (All active products visible by default - Cached)
 export const getUserProducts = async (query = {}, userCurrency = null) => {
-  const cacheKey = `user_prods_${JSON.stringify(query)}_${userCurrency || 'all'}`;
+  const normalizedQuery = {
+    category: query.category,
+    subCategoryId: query.subCategoryId,
+    mainCategory: query.mainCategory,
+    search: query.search ? query.search.trim().toLowerCase() : undefined,
+    limit: query.limit,
+    includeSubCategories: query.includeSubCategories,
+  };
+  const cacheKey = `user_prods_${JSON.stringify(normalizedQuery)}_${userCurrency || 'all'}`;
   const cached = serverCache.get(cacheKey);
   if (cached) return cached;
 
@@ -1650,48 +1688,69 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
         ],
       });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
-      andClauses.push({ subCategoryId: new mongoose.Types.ObjectId(query.subCategoryId) });
+      const objId = new mongoose.Types.ObjectId(query.subCategoryId);
+      andClauses.push({
+        $or: [
+          { subCategoryId: objId },
+          { subCategoryId: String(query.subCategoryId) },
+        ],
+      });
+    } else {
+      andClauses.push({ subCategoryId: query.subCategoryId });
     }
   }
   if (query.mainCategory && query.mainCategory !== 'all') {
     andClauses.push({ mainCategory: query.mainCategory });
   }
   if (query.search) {
+    const s = query.search.trim();
     andClauses.push({
       $or: [
-        { name: { $regex: query.search, $options: 'i' } },
-        { category: { $regex: query.search, $options: 'i' } },
-        { subCategoryName: { $regex: query.search, $options: 'i' } },
+        { name: { $regex: s, $options: 'i' } },
+        { category: { $regex: s, $options: 'i' } },
+        { subCategoryName: { $regex: s, $options: 'i' } },
       ],
     });
   }
 
   const filter = andClauses.length === 1 ? andClauses[0] : { $and: andClauses };
 
-  const settings = await getSettings();
+  const [settings, profitMaps] = await Promise.all([
+    getSettings(),
+    getCategoryProfitMap(),
+  ]);
   const globalProfitPercentage = settings.profitPercentage || 0;
-  const { catMap, subCatMap } = await getCategoryProfitMap();
+  const { catMap, subCatMap } = profitMaps;
   const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
   const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
-  const products = await Product.find(filter).sort({ category: 1, name: 1 });
-  const mappedProducts = products.map((p) => {
-    const doc = p.toObject ? p.toObject() : { ...p };
+  let productQuery = Product.find(filter)
+    .select('-rawPayload')
+    .sort({ sortOrder: 1, category: 1, name: 1 })
+    .lean();
+
+  if (query.limit) {
+    const lim = Math.max(1, Math.min(Number(query.limit) || 200, 500));
+    productQuery = productQuery.limit(lim);
+  }
+
+  const products = await productQuery;
+  const mappedProducts = products.map((doc) => {
     const isCustom = doc.source === 'custom';
     const effectiveProfit = resolveProductProfitPercentage(doc, globalProfitPercentage, catMap, subCatMap);
     const baseCost =
       doc.originalPrice && doc.originalPrice > 0
         ? doc.originalPrice
         : doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
-        ? doc.sellingPrice
-        : doc.price && doc.price > 0
-        ? doc.price
-        : 0;
+          ? doc.sellingPrice
+          : doc.price && doc.price > 0
+            ? doc.price
+            : 0;
     const priceBeforeDiscount = isCustom
       ? calcSmartPrice(doc.sellingPrice && doc.sellingPrice > 0 ? doc.sellingPrice : (doc.price || baseCost))
       : (effectiveProfit > 0
-          ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-          : baseCost);
+        ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
+        : baseCost);
     const discountPercent = doc.discountPercent || 0;
     const finalPrice =
       discountPercent > 0
@@ -1716,6 +1775,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
 
     return {
       ...doc,
+      id: doc._id ? doc._id.toString() : doc.id,
       currency: finalCurrency,
       costPrice: convertedCost,
       price: convertedFinalPrice,
@@ -1725,11 +1785,13 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     };
   });
 
-  // Fetch subcategories for this view if mainCategory provided (with user currency)
+  // Only fetch subcategories if explicitly requested AND not filtering by a specific subcategory
   let subCategories = [];
-  try {
-    subCategories = await getSubCategories(query.mainCategory || 'all', userCurrency);
-  } catch (_) {}
+  if (query.includeSubCategories === 'true' && query.mainCategory && query.mainCategory !== 'all' && !query.subCategoryId) {
+    try {
+      subCategories = await getSubCategories(query.mainCategory, userCurrency);
+    } catch (_) { }
+  }
 
   // Group by category for a cleaner store layout
   const grouped = {};
@@ -1745,9 +1807,10 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     grouped,
     categories: Object.keys(grouped),
     subCategories,
+    total: mappedProducts.length,
   };
 
-  serverCache.set(cacheKey, responseData, 45);
+  serverCache.set(cacheKey, responseData, 60);
   return responseData;
 };
 
@@ -1758,9 +1821,12 @@ export const getProductDetails = async (id, userCurrency = null) => {
     throw new ApiError('Product not found', HTTP_STATUS.NOT_FOUND);
   }
 
-  const settings = await getSettings();
+  const [settings, profitMaps] = await Promise.all([
+    getSettings(),
+    getCategoryProfitMap(),
+  ]);
   const globalProfitPercentage = settings.profitPercentage || 0;
-  const { catMap, subCatMap } = await getCategoryProfitMap();
+  const { catMap, subCatMap } = profitMaps;
   const profitPercentage = resolveProductProfitPercentage(product, globalProfitPercentage, catMap, subCatMap);
 
   // 1. If provider is SW Games (رؤيا - ROYA_USD / ROYA_SYP)
@@ -1788,8 +1854,8 @@ export const getProductDetails = async (id, userCurrency = null) => {
         pkg.maxCount !== undefined && pkg.maxCount !== null
           ? pkg.maxCount
           : raw.maxCount
-          ? parseInt(raw.maxCount)
-          : null;
+            ? parseInt(raw.maxCount)
+            : null;
       const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
       const qtyValues = Array.isArray(rawQtyValues)
         ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
@@ -1808,8 +1874,8 @@ export const getProductDetails = async (id, userCurrency = null) => {
         pkg.originalPrice && pkg.originalPrice > 0
           ? pkg.originalPrice
           : pkg.sellingPrice && pkg.sellingPrice > 0
-          ? pkg.sellingPrice
-          : pkg.price || 0;
+            ? pkg.sellingPrice
+            : pkg.price || 0;
 
       const priceBeforeDiscount =
         profitPercentage > 0
@@ -1961,14 +2027,14 @@ export const getProductDetails = async (id, userCurrency = null) => {
     product.originalPrice && product.originalPrice > 0
       ? product.originalPrice
       : product.sellingPrice && product.sellingPrice > 0
-      ? product.sellingPrice
-      : product.price || 0;
+        ? product.sellingPrice
+        : product.price || 0;
 
   const fallbackPriceBeforeDiscount = isCustom
     ? calcSmartPrice(product.sellingPrice && product.sellingPrice > 0 ? product.sellingPrice : (product.price || fallbackBaseCost))
     : (profitPercentage > 0
-        ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
-        : fallbackBaseCost);
+      ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
+      : fallbackBaseCost);
 
   const discountPercent = product.discountPercent || 0;
   const fallbackUserPrice =
@@ -2230,5 +2296,65 @@ export const deleteCustomProduct = async (id) => {
 
   await product.deleteOne();
   return { message: 'تم حذف المنتج بنجاح', id };
+};
+
+// 16. Update Product Custom Details (Name / Image Override)
+export const updateProductCustomDetails = async (id, { name, image } = {}) => {
+  const product = await Product.findById(id);
+  if (!product) {
+    throw new ApiError('المنتج غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Preserve original provider name/image if not already saved
+  if (!product.providerName) {
+    product.providerName = product.name;
+  }
+  if (!product.providerImage) {
+    product.providerImage = product.image;
+  }
+
+  if (name !== undefined && name !== null && name.trim()) {
+    product.name = name.trim();
+    product.customName = name.trim();
+    product.isNameOverridden = true;
+  }
+
+  if (image !== undefined && image !== null) {
+    product.image = image.trim();
+    product.customImage = image.trim();
+    product.isImageOverridden = true;
+  }
+
+  await product.save();
+  serverCache.clearAll();
+  return product;
+};
+
+// 17. Revert Product Custom Details to Original Provider Values
+export const revertProductCustomDetails = async (id, { revertName = true, revertImage = true } = {}) => {
+  const product = await Product.findById(id);
+  if (!product) {
+    throw new ApiError('المنتج غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (revertName) {
+    if (product.providerName) {
+      product.name = product.providerName;
+    }
+    product.customName = null;
+    product.isNameOverridden = false;
+  }
+
+  if (revertImage) {
+    if (product.providerImage) {
+      product.image = product.providerImage;
+    }
+    product.customImage = null;
+    product.isImageOverridden = false;
+  }
+
+  await product.save();
+  serverCache.clearAll();
+  return product;
 };
 
