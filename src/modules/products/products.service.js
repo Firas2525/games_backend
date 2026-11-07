@@ -212,6 +212,30 @@ export const purgeSyriaCardProducts = async () => {
 export const deactivateSyriaCardProducts = purgeSyriaCardProducts;
 
 // 3. Sync from approved providers (Roya USD, Roya SYP, Brand 1 Card) into MongoDB
+/**
+ * Ensures the dedicated "العناصر الجديدة" SubCategory folder exists for a given main category.
+ * Used for receiving newly discovered provider products with disabled status.
+ */
+export const ensureNewItemsSubCategory = async (mainCategory = 'games') => {
+  const targetCategory = mainCategory || 'games';
+  let subCat = await SubCategory.findOne({
+    name: 'العناصر الجديدة',
+    mainCategory: targetCategory,
+    parentId: null,
+  });
+  if (!subCat) {
+    subCat = await SubCategory.create({
+      name: 'العناصر الجديدة',
+      mainCategory: targetCategory,
+      parentId: null,
+      imageUrl: 'https://cdn-icons-png.flaticon.com/512/3500/3500833.png',
+      sortOrder: -100, // Appears first in folder view
+      isVisible: true, // Visible for admin to manage
+    });
+  }
+  return subCat;
+};
+
 export const syncAllProducts = async () => {
   // First, migrate any legacy 'sw_games' source name to 'roya_usd' and deactivate syria_card
   try {
@@ -237,106 +261,183 @@ export const syncAllProducts = async () => {
   if (allNormalized.length === 0) {
     return {
       totalSynced: 0,
+      brandNewCount: 0,
+      updatedExistingCount: 0,
       royaUsdCount: 0,
       royaSypCount: 0,
       brand1CardCount: 0,
     };
   }
 
-  // Load existing overridden products so their mainCategory/name/image are NOT overwritten
-  const overridden = await Product.find({
-    $or: [
-      { isCategoryOverridden: true },
-      { isNameOverridden: true },
-      { isImageOverridden: true },
-    ],
+  // 1. Fetch ALL existing provider products currently in DB (including disabled or previously stopped ones)
+  const existingProducts = await Product.find({
+    source: { $in: ['roya_usd', 'roya_syp', 'brand1card', 'sw_games'] },
   })
-    .select('source externalId isCategoryOverridden isNameOverridden isImageOverridden')
+    .select('_id source externalId name image mainCategory subCategoryId subCategoryName subCategoryImage isCategoryOverridden isNameOverridden isImageOverridden isVisible isAvailable category providerName providerImage')
     .lean();
-  const overriddenMap = new Map(overridden.map((p) => [`${p.source}:${p.externalId}`, p]));
 
-  // Batch operations: Visible by default so user sees items immediately!
-  const operations = allNormalized.map((item) => {
-    const existingOverride = overriddenMap.get(`${item.source}:${item.externalId}`);
-    const updateDoc = {
-      category: item.category,
-      price: item.price,
-      originalPrice: item.originalPrice,
-      currency: item.currency,
-      isAvailable: item.isAvailable,
-      isVisible: true, // Visible by default like legacy site
-      minCount: item.minCount,
-      maxCount: item.maxCount,
-      qtyValues: item.qtyValues,
-      requiredFields: item.requiredFields,
-      sourceName: item.sourceName,
-      rawPayload: item.rawPayload,
-      providerName: item.name,
-      providerImage: item.image,
-    };
-
-    if (!existingOverride?.isNameOverridden) {
-      updateDoc.name = item.name;
-    }
-    if (!existingOverride?.isImageOverridden) {
-      updateDoc.image = item.image;
-    }
-    if (!existingOverride?.isCategoryOverridden) {
-      updateDoc.mainCategory = item.mainCategory;
-    }
-
-    return {
-      updateOne: {
-        filter: { source: item.source, externalId: item.externalId },
-        update: {
-          $set: updateDoc,
-          $setOnInsert: {
-            isCategoryOverridden: false,
-            isNameOverridden: false,
-            isImageOverridden: false,
-          },
-        },
-        upsert: true,
-      },
-    };
-  });
-
-  const bulkResult = await Product.bulkWrite(operations, { ordered: false });
-
-  // Update existing products in DB to ensure proper mainCategory and visibility
-  const allExisting = await Product.find({ isCategoryOverridden: { $ne: true } }).lean();
-  if (allExisting.length > 0) {
-    const reclassOps = allExisting.map((p) => ({
-      updateOne: {
-        filter: { _id: p._id },
-        update: {
-          $set: {
-            mainCategory: detectMainCategory(p.name, p.category, p.source),
-            isVisible: true,
-          },
-        },
-      },
-    }));
-    await Product.bulkWrite(reclassOps, { ordered: false });
+  const existingMap = new Map();
+  for (const p of existingProducts) {
+    existingMap.set(`${p.source}:${p.externalId}`, p);
   }
 
+  // Cache for "العناصر الجديدة" folders per mainCategory
+  const newItemsFolderCache = new Map();
+  const getNewItemsFolder = async (mainCategory = 'games') => {
+    const key = mainCategory || 'games';
+    if (newItemsFolderCache.has(key)) {
+      return newItemsFolderCache.get(key);
+    }
+    const folder = await ensureNewItemsSubCategory(key);
+    newItemsFolderCache.set(key, folder);
+    return folder;
+  };
+
+  const operations = [];
+  const currentProviderKeys = new Set();
+  let brandNewCount = 0;
+  let updatedExistingCount = 0;
+
+  for (const item of allNormalized) {
+    const key = `${item.source}:${item.externalId}`;
+    currentProviderKeys.add(key);
+
+    const existing = existingMap.get(key);
+
+    if (existing) {
+      // SCENARIO 1: Existing product (either active or returning after a temporary stop)
+      // -> MUST return to its existing subfolder (subCategoryId, subCategoryName) and mainCategory!
+      // -> Preserves custom name, image, and admin visibility state!
+      const updateDoc = {
+        price: item.price,
+        originalPrice: item.originalPrice,
+        currency: item.currency,
+        isAvailable: item.isAvailable !== false, // Provider brought it back / available
+        minCount: item.minCount,
+        maxCount: item.maxCount,
+        qtyValues: item.qtyValues,
+        requiredFields: item.requiredFields,
+        sourceName: item.sourceName,
+        rawPayload: item.rawPayload,
+        providerName: item.name,
+        providerImage: item.image,
+      };
+
+      if (!existing.isNameOverridden) {
+        updateDoc.name = item.name;
+      }
+      if (!existing.isImageOverridden) {
+        updateDoc.image = item.image;
+      }
+
+      // Preserve existing subfolder & categorization 100%!
+      if (existing.subCategoryId) {
+        updateDoc.subCategoryId = existing.subCategoryId;
+        updateDoc.subCategoryName = existing.subCategoryName || '';
+        updateDoc.subCategoryImage = existing.subCategoryImage || '';
+        updateDoc.mainCategory = existing.mainCategory;
+      } else if (existing.isCategoryOverridden) {
+        updateDoc.mainCategory = existing.mainCategory;
+      }
+
+      // Preserve visibility state set by admin (do not overwrite disabled products)
+      updateDoc.isVisible = existing.isVisible;
+
+      operations.push({
+        updateOne: {
+          filter: { _id: existing._id },
+          update: { $set: updateDoc },
+        },
+      });
+      updatedExistingCount++;
+    } else {
+      // SCENARIO 2: BRAND NEW product from provider!
+      // -> Put in folder "العناصر الجديدة" (New Items)
+      // -> Default state: DISABLED (isVisible: false) until admin moves and activates!
+      const mainCat = item.mainCategory || detectMainCategory(item.name, item.category, item.source) || 'games';
+      const newItemsFolder = await getNewItemsFolder(mainCat);
+
+      const newDoc = {
+        source: item.source,
+        externalId: item.externalId,
+        sourceName: item.sourceName,
+        name: item.name,
+        category: item.category,
+        image: item.image,
+        mainCategory: mainCat,
+        subCategoryId: newItemsFolder._id,
+        subCategoryName: newItemsFolder.name, // 'العناصر الجديدة'
+        subCategoryImage: newItemsFolder.imageUrl,
+        isCategoryOverridden: false,
+        isNameOverridden: false,
+        isImageOverridden: false,
+        price: item.price,
+        originalPrice: item.originalPrice,
+        currency: item.currency,
+        isAvailable: item.isAvailable !== false,
+        isVisible: false, // Default: DISABLED / INACTIVE until admin moves and enables!
+        minCount: item.minCount,
+        maxCount: item.maxCount,
+        qtyValues: item.qtyValues,
+        requiredFields: item.requiredFields,
+        rawPayload: item.rawPayload,
+        providerName: item.name,
+        providerImage: item.image,
+      };
+
+      operations.push({
+        insertOne: {
+          document: newDoc,
+        },
+      });
+      brandNewCount++;
+    }
+  }
+
+  // Products in DB that temporarily disappeared from provider:
+  // Mark them unavailable (isAvailable: false) without deleting them,
+  // so when they return later with the same ID, they seamlessly reactivate in the exact same subfolder!
+  const missingProductIds = [];
+  for (const p of existingProducts) {
+    const key = `${p.source}:${p.externalId}`;
+    if (!currentProviderKeys.has(key) && p.isAvailable) {
+      missingProductIds.push(p._id);
+    }
+  }
+
+  if (missingProductIds.length > 0) {
+    await Product.updateMany(
+      { _id: { $in: missingProductIds } },
+      { $set: { isAvailable: false } }
+    );
+  }
+
+  const bulkResult = operations.length > 0 ? await Product.bulkWrite(operations, { ordered: false }) : {};
+  serverCache.clearAll();
+
   const totalSynced =
-    (bulkResult.upsertedCount || 0) +
+    (bulkResult.insertedCount || brandNewCount || 0) +
     (bulkResult.modifiedCount || 0) +
     (bulkResult.matchedCount || 0);
 
   return {
     totalSynced,
+    brandNewCount,
+    updatedExistingCount,
+    temporarilyUnavailableCount: missingProductIds.length,
     royaUsdCount: swUsdList.length,
     royaSypCount: swSypList.length,
-    syriaCardCount: auto1List.length,
     brand1CardCount: brand1List.length,
   };
 };
 
-// Standalone function to reclassify all non-overridden products
+// Standalone function to reclassify non-overridden products (excluding items in subfolders or new items)
 export const reclassifyAllProducts = async () => {
-  const allExisting = await Product.find({ isCategoryOverridden: { $ne: true } }).lean();
+  const allExisting = await Product.find({
+    isCategoryOverridden: { $ne: true },
+    subCategoryId: null,
+    subCategoryName: { $ne: 'العناصر الجديدة' },
+  }).lean();
   if (allExisting.length === 0) {
     return { reclassifiedCount: 0, message: 'لا توجد منتجات بحاجة لإعادة الفرز' };
   }
@@ -347,7 +448,6 @@ export const reclassifyAllProducts = async () => {
       update: {
         $set: {
           mainCategory: detectMainCategory(p.name, p.category, p.source),
-          isVisible: true,
         },
       },
     },
@@ -832,6 +932,7 @@ export const getAllCategories = async (userCurrency = null, isAdmin = false) => 
   }));
 
   if (!isAdmin) {
+    result = result.filter((cat) => cat.productCount > 0);
     serverCache.set(cacheKey, result, 60);
   }
   return result;
@@ -1384,6 +1485,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   });
 
   if (!isAdmin) {
+    result = result.filter((sc) => sc.name !== 'العناصر الجديدة' && sc.productCount > 0);
     serverCache.set(cacheKey, result, 60);
   }
   return result;
