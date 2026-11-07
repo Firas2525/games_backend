@@ -310,6 +310,15 @@ export const getUserFinancialSummary = async (userId) => {
   };
 };
 
+const truncateTo2Decimals = (val) => {
+  if (!val || val <= 0) return 0;
+  const s = Number(val).toFixed(6);
+  const parts = s.split('.');
+  if (parts.length === 1) return Number(parts[0]);
+  const decimals = parts[1].padEnd(2, '0').substring(0, 2);
+  return Number(`${parts[0]}.${decimals}`);
+};
+
 export const getCoinsInfo = async (userId) => {
   const user = await User.findById(userId);
   if (!user) {
@@ -325,13 +334,18 @@ export const getCoinsInfo = async (userId) => {
   const userCoins = Number(user.coins || 0);
   const userCurrency = user.currency === 'SYP' ? 'SYP' : 'USD';
 
-  // Value in USD
-  const equivalentUsd = Number((userCoins / coinsPerDollar).toFixed(2));
-  // Value in SYP
-  const equivalentSyp = Math.round((userCoins / coinsPerDollar) * exchangeRate);
+  // Value in USD - truncated to 2 decimal places (ignoring any digits beyond 2 decimals, strictly no rounding up!)
+  const rawUsd = userCoins / coinsPerDollar;
+  const equivalentUsd = truncateTo2Decimals(rawUsd);
+  // Value in SYP (calculated from the truncated USD value)
+  const equivalentSyp = Math.floor(equivalentUsd * exchangeRate);
 
   // The actual credit the user will get in their wallet currency
   const walletCreditAmount = userCurrency === 'SYP' ? equivalentSyp : equivalentUsd;
+
+  const minRedeemUsd = 1.0;
+  const minCoinsRequired = Math.ceil(coinsPerDollar * minRedeemUsd);
+  const canRedeem = equivalentUsd >= minRedeemUsd;
 
   return {
     coins: userCoins,
@@ -343,6 +357,9 @@ export const getCoinsInfo = async (userId) => {
     equivalentUsd,
     equivalentSyp,
     walletCreditAmount,
+    minRedeemUsd,
+    minCoinsRequired,
+    canRedeem,
   };
 };
 
@@ -367,16 +384,28 @@ export const redeemCoins = async (userId, requestedCoins) => {
   const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
   const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
-  // Calculate USD value
-  const usdValue = coinsToRedeem / coinsPerDollar;
+  // Calculate raw USD value & strictly truncate to 2 decimals (ignoring any digits after 2 decimal places, no rounding up!)
+  const rawUsd = coinsToRedeem / coinsPerDollar;
+  const truncatedUsd = truncateTo2Decimals(rawUsd);
+
+  // Minimum redemption limit: Must be at least 1.00 USD!
+  const minRedeemUsd = 1.0;
+  const minCoinsRequired = Math.ceil(coinsPerDollar * minRedeemUsd);
+
+  if (truncatedUsd < minRedeemUsd) {
+    throw new ApiError(
+      `الحد الأدنى لاستبدال الكوينز هو 1.00$ (يتطلب ${minCoinsRequired} كوينز على الأقل)`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
 
   const userCurrency = user.currency === 'SYP' ? 'SYP' : 'USD';
   let creditAmount = 0;
 
   if (userCurrency === 'SYP') {
-    creditAmount = Math.round(usdValue * exchangeRate);
+    creditAmount = Math.floor(truncatedUsd * exchangeRate);
   } else {
-    creditAmount = Number(usdValue.toFixed(2));
+    creditAmount = truncatedUsd;
   }
 
   if (creditAmount <= 0) {
