@@ -873,7 +873,12 @@ export const buildCurrencyProductFilter = (currencyStr) => {
             },
             {
               source: 'custom',
-              currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] },
+              $or: [
+                { currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] } },
+                { currency: null },
+                { currency: { $exists: false } },
+                { currency: '' },
+              ],
             },
           ],
         },
@@ -1753,6 +1758,28 @@ export const bulkAssignSubCategory = async ({ productIds, subCategoryId, subCate
   return { modifiedCount: result.modifiedCount };
 };
 
+export function buildFlexibleSearchRegex(queryText) {
+  if (!queryText || !queryText.trim()) return /.*/i;
+  const escapeRegex = (str) => str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+  const normalizeChar = (c) => {
+    if (['ا', 'أ', 'إ', 'آ'].includes(c)) return '[اأإآ]';
+    if (['ة', 'ه'].includes(c)) return '[ةه]';
+    if (['ي', 'ى', 'ئ'].includes(c)) return '[يىئ]';
+    if (['و', 'ؤ'].includes(c)) return '[وؤ]';
+    return escapeRegex(c);
+  };
+
+  const words = queryText.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return /.*/i;
+
+  const wordPatterns = words.map((w) => {
+    return w.split('').map(normalizeChar).join('');
+  });
+
+  const pattern = wordPatterns.map((wp) => `(?=.*${wp})`).join('');
+  return new RegExp(pattern, 'i');
+}
+
 // 7. User: Get visible products grouped by Category (All active products visible by default - Cached)
 export const getUserProducts = async (query = {}, userCurrency = null) => {
   const normalizedQuery = {
@@ -1789,16 +1816,55 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
           { subCategoryId: { $exists: false } },
         ],
       });
-    } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
-      const objId = new mongoose.Types.ObjectId(query.subCategoryId);
-      andClauses.push({
-        $or: [
-          { subCategoryId: objId },
-          { subCategoryId: String(query.subCategoryId) },
-        ],
-      });
     } else {
-      andClauses.push({ subCategoryId: query.subCategoryId });
+      let targetSubCat = null;
+      if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
+        try {
+          targetSubCat = await SubCategory.findById(query.subCategoryId).lean();
+        } catch (_) {}
+      }
+      if (!targetSubCat) {
+        try {
+          targetSubCat = await SubCategory.findOne({ name: query.subCategoryId }).lean();
+        } catch (_) {}
+      }
+
+      if (targetSubCat) {
+        const childSubs = await SubCategory.find({ parentId: targetSubCat._id }).select('_id name').lean();
+        const allIds = [
+          targetSubCat._id,
+          targetSubCat._id.toString(),
+          ...childSubs.map((c) => c._id),
+          ...childSubs.map((c) => c._id.toString()),
+        ];
+        const allNames = [
+          targetSubCat.name.trim(),
+          ...childSubs.map((c) => c.name.trim()),
+        ];
+        andClauses.push({
+          $or: [
+            { subCategoryId: { $in: allIds } },
+            { subCategoryName: { $in: allNames } },
+            { category: { $in: allNames } },
+          ],
+        });
+      } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
+        const objId = new mongoose.Types.ObjectId(query.subCategoryId);
+        andClauses.push({
+          $or: [
+            { subCategoryId: objId },
+            { subCategoryId: String(query.subCategoryId) },
+          ],
+        });
+      } else {
+        andClauses.push({
+          $or: [
+            { subCategoryId: query.subCategoryId },
+            { subCategoryName: query.subCategoryId },
+            { category: query.subCategoryId },
+          ],
+        });
+      }
     }
   }
   if (query.mainCategory && query.mainCategory !== 'all') {
@@ -1806,11 +1872,15 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   }
   if (query.search) {
     const s = query.search.trim();
+    const searchRegex = buildFlexibleSearchRegex(s);
     andClauses.push({
       $or: [
-        { name: { $regex: s, $options: 'i' } },
-        { category: { $regex: s, $options: 'i' } },
-        { subCategoryName: { $regex: s, $options: 'i' } },
+        { name: searchRegex },
+        { customName: searchRegex },
+        { category: searchRegex },
+        { subCategoryName: searchRegex },
+        { sourceName: searchRegex },
+        { providerName: searchRegex },
       ],
     });
   }
@@ -1831,8 +1901,10 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     .sort({ sortOrder: 1, category: 1, name: 1 })
     .lean();
 
-  if (query.limit) {
-    const lim = Math.max(1, Math.min(Number(query.limit) || 200, 500));
+  if (query.limit || query.search) {
+    const lim = query.search
+      ? Math.max(1, Math.min(Number(query.limit) || 300, 500))
+      : Math.max(1, Math.min(Number(query.limit) || 200, 500));
     productQuery = productQuery.limit(lim);
   }
 
@@ -1912,7 +1984,8 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
     total: mappedProducts.length,
   };
 
-  serverCache.set(cacheKey, responseData, 60);
+  const cacheTtl = query.search ? 10 : 60;
+  serverCache.set(cacheKey, responseData, cacheTtl);
   return responseData;
 };
 
