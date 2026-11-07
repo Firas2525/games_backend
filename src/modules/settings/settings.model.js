@@ -63,6 +63,20 @@ const settingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isMaintenance: {
+      type: Boolean,
+      default: false,
+    },
+    maintenanceTitle: {
+      type: String,
+      default: 'أعمال صيانة وتحديث',
+      trim: true,
+    },
+    maintenanceMessage: {
+      type: String,
+      default: 'نقوم حالياً ببعض أعمال الصيانة والتحسينات الدورية لنقدم لكم تجربة أفضل وأسرع. سنعود للعمل قريباً جداً، نشكر تفهمكم!',
+      trim: true,
+    },
   },
   {
     timestamps: true,

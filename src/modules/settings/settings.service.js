@@ -12,6 +12,9 @@ export const getSettings = async () => {
       cashbackPercentage: 5,
       coinsPerDollar: 100,
       isCashbackActive: true,
+      isMaintenance: false,
+      maintenanceTitle: 'أعمال صيانة وتحديث',
+      maintenanceMessage: 'نقوم حالياً ببعض أعمال الصيانة والتحسينات الدورية لنقدم لكم تجربة أفضل وأسرع. سنعود للعمل قريباً جداً، نشكر تفهمكم!',
     });
   }
   return settings;
@@ -121,4 +124,38 @@ export const updateLevelBadge = async ({ levelKey, badgeUrl }) => {
 
   return await getLevelSettings();
 };
+
+export const getMaintenanceSettings = async () => {
+  const settings = await getSettings();
+  return {
+    isMaintenance: Boolean(settings.isMaintenance),
+    maintenanceTitle: settings.maintenanceTitle || 'أعمال صيانة وتحديث',
+    maintenanceMessage: settings.maintenanceMessage || 'نقوم حالياً ببعض أعمال الصيانة والتحسينات الدورية لنقدم لكم تجربة أفضل وأسرع. سنعود للعمل قريباً جداً، نشكر تفهمكم!',
+    updatedAt: settings.updatedAt,
+  };
+};
+
+export const updateMaintenanceSettings = async ({ isMaintenance, maintenanceTitle, maintenanceMessage }) => {
+  let settings = await Settings.findOne({ key: 'system_settings' });
+  if (!settings) {
+    settings = new Settings({ key: 'system_settings' });
+  }
+  if (isMaintenance !== undefined) {
+    settings.isMaintenance = Boolean(isMaintenance);
+  }
+  if (maintenanceTitle !== undefined) {
+    settings.maintenanceTitle = String(maintenanceTitle || '').trim();
+  }
+  if (maintenanceMessage !== undefined) {
+    settings.maintenanceMessage = String(maintenanceMessage || '').trim();
+  }
+  await settings.save();
+  return {
+    isMaintenance: Boolean(settings.isMaintenance),
+    maintenanceTitle: settings.maintenanceTitle,
+    maintenanceMessage: settings.maintenanceMessage,
+    updatedAt: settings.updatedAt,
+  };
+};
+
 
