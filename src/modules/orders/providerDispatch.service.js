@@ -828,6 +828,9 @@ export function extractOrderDeliveryDetails(order) {
       }
     }
   }
+  for (const k of ['image', 'imageUrl', 'receipt', 'receiptUrl', 'proof', 'proofImage', 'screenshot', 'attachment', 'file']) {
+    if (resp[k]) addLine(resp[k]);
+  }
 
   // 2. Brand One Card (replay_api inside root or data)
   const replayArrays = [resp.replay_api, resp.data?.replay_api].filter(Array.isArray);
