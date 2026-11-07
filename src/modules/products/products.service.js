@@ -917,7 +917,7 @@ export const getAllCategories = async (userCurrency = null, isAdmin = false) => 
     countMap[pc._id] = pc.count;
   }
 
-  const result = categories.map((cat) => ({
+  let result = categories.map((cat) => ({
     id: cat._id.toString(),
     key: cat.key,
     title: cat.title,
@@ -1451,7 +1451,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     }
   }
 
-  const result = subCategories.map((sc) => {
+  let result = subCategories.map((sc) => {
     const sIdStr = sc._id.toString();
     const scProducts = productsBySubId[sIdStr] || [];
     const validPrices = scProducts
