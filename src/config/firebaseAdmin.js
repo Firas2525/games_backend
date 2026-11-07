@@ -318,9 +318,14 @@ export const sendBroadcastNotificationToUsers = async ({ title, body, data = {} 
 export const sendDirectUserNotification = async (userId, { title, body, data = {} }) => {
   if (!firebaseApp) return { success: false, reason: 'uninitialized' };
   try {
-    const user = await User.findById(userId).select('fcmToken name').lean();
+    const targetId = (userId && typeof userId === 'object' && userId._id) ? userId._id : userId;
+    if (!targetId || !mongoose.isValidObjectId(targetId)) {
+      console.warn(`[FirebaseAdmin] Skipped direct push: Invalid targetId "${targetId}" provided.`);
+      return { success: false, reason: 'invalid_user_id' };
+    }
+    const user = await User.findById(targetId).select('fcmToken name').lean();
     if (!user || !user.fcmToken) {
-      console.warn(`[FirebaseAdmin] Skipped direct push: User ${userId} has no registered FCM token.`);
+      console.warn(`[FirebaseAdmin] Skipped direct push: User ${targetId} has no registered FCM token.`);
       return { success: false, reason: 'no_token' };
     }
 

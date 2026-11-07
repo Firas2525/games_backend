@@ -37,7 +37,7 @@ export const getProfitReports = asyncHandler(async (req, res) => {
 export const checkOrderStatus = asyncHandler(async (req, res) => {
   const { orderId } = req.params;
   const result = await ordersService.checkSingleOrder(orderId);
-  return ApiResponse.success(res, result, 'تم فحص حالة الطلب من المزود بنجاح');
+  return ApiResponse.success(res, result, result.message || 'تم فحص حالة الطلب من المزود بنجاح');
 });
 
 export const syncOrders = asyncHandler(async (req, res) => {

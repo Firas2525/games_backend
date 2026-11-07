@@ -468,9 +468,10 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
     return false;
   }
 
-  const user = await User.findById(order.userId);
+  const targetUserId = order.userId?._id || order.userId;
+  const user = await User.findById(targetUserId);
   if (!user) {
-    console.error(`User ${order.userId} not found for refunding order ${order.orderId}`);
+    console.error(`User ${targetUserId} not found for refunding order ${order.orderId}`);
     return false;
   }
 
@@ -525,7 +526,7 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
   }
   // Notify User about refund
   const pushCoinsText = coinsDeducted > 0 ? ` وإلغاء ${coinsDeducted} كوينز كاش باك من حسابك.` : '.';
-  sendDirectUserNotification(order.userId, {
+  sendDirectUserNotification(targetUserId, {
     title: 'تحديث بشأن طلبك: تم استرجاع المبلغ ↩️',
     body: `تم إلغاء/فشل طلب (${order.productName || 'طلب شحن'}) واسترجاع المبلغ (${refundAmount} ${normalizedCurrency}) إلى محفظتك${pushCoinsText}`,
     data: {
@@ -917,59 +918,104 @@ export const getAllOrdersAdmin = async (query = {}) => {
 export const checkSingleOrder = async (orderId) => {
   const order = await Order.findOne({
     $or: [{ orderId }, { _id: mongoose.isValidObjectId(orderId) ? orderId : null }],
-  });
+  }).populate('userId', 'name email phone avatar balance currency userCode');
+
   if (!order) {
     throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
   if (order.status === 'failed' && order.refunded) {
-    return { order: enrichOrderWithInvoiceMeta(order), message: 'الطلب ملغي ومسترجع مسبقاً' };
+    return {
+      order: enrichOrderWithInvoiceMeta(order),
+      updated: false,
+      status: order.status,
+      message: 'الطلب ملغي ومسترجع مسبقاً',
+    };
   }
 
   let updated = false;
-  const isSw =
-    order.source === 'roya_usd' ||
-    order.source === 'roya_syp' ||
-    order.source === 'sw_games' ||
-    (!['brand1card', 'auto1card'].includes(order.source));
+  const isSw = ['roya_usd', 'roya_syp', 'sw_games'].includes(order.source);
+  const isBrand = ['brand1card', 'auto1card'].includes(order.source);
+  const isCustom = order.source === 'custom' || (!isSw && !isBrand);
 
   if (isSw) {
-    const isSyp = order.source === 'roya_syp' || order.currency === 'SYP';
-    const batchRes = await checkSwGamesOrdersBatch([order], isSyp);
-    const res = batchRes.get(order._id.toString());
-    if (res) {
-      if (res.status === 'failed' && !order.refunded) {
-        await refundOrderWallet(order, res);
-        updated = true;
-      } else if (res.status === 'completed' && order.status !== 'completed') {
-        order.status = 'completed';
-        order.completedAt = order.completedAt || new Date();
-        if (res.rawData) order.providerResponse = res.rawData;
-        if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
-        await order.save();
-        updated = true;
+    try {
+      const isSyp = order.source === 'roya_syp' || order.currency === 'SYP';
+      const batchRes = await checkSwGamesOrdersBatch([order], isSyp);
+      const res = batchRes.get(order._id.toString());
+      if (res) {
+        if (res.status === 'failed' && !order.refunded) {
+          await refundOrderWallet(order, res);
+          updated = true;
+        } else if (res.status === 'completed') {
+          if (order.status !== 'completed') {
+            order.status = 'completed';
+            order.completedAt = order.completedAt || new Date();
+            updated = true;
+          }
+          if (res.rawData) order.providerResponse = res.rawData;
+          if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+          await order.save();
+        }
       }
+    } catch (swErr) {
+      console.error('[checkSingleOrder SW Error]:', swErr.message);
     }
-  } else {
-    const checkResult = await checkExternalOrderStatus(order);
-    if (checkResult.changed) {
-      if (checkResult.status === 'failed' && !order.refunded) {
-        await refundOrderWallet(order, checkResult);
-        updated = true;
-      } else if (checkResult.status === 'completed') {
-        order.status = 'completed';
-        order.completedAt = order.completedAt || new Date();
-        if (checkResult.rawData) order.providerResponse = checkResult.rawData;
-        await order.save();
-        updated = true;
+  } else if (isBrand) {
+    try {
+      const checkResult = await checkExternalOrderStatus(order);
+      if (checkResult.changed || checkResult.status === 'completed') {
+        if (checkResult.status === 'failed' && !order.refunded) {
+          await refundOrderWallet(order, checkResult);
+          updated = true;
+        } else if (checkResult.status === 'completed') {
+          if (order.status !== 'completed') {
+            order.status = 'completed';
+            order.completedAt = order.completedAt || new Date();
+            updated = true;
+          }
+          if (checkResult.rawData) order.providerResponse = checkResult.rawData;
+          await order.save();
+        }
       }
+    } catch (brandErr) {
+      console.error('[checkSingleOrder Brand Error]:', brandErr.message);
     }
+  }
+
+  // Push notification delivery if completed
+  if (order.status === 'completed') {
+    const targetUserId = order.userId?._id || order.userId;
+    if (targetUserId) {
+      sendDirectUserNotification(targetUserId, {
+        title: 'تم تنفيذ طلبك بنجاح! 🎮',
+        body: `تم إكمال طلب شحن (${order.productName || 'طلب شحن'}) بنجاح. شكراً لتعاملك معنا!`,
+        data: {
+          type: 'order_completed',
+          orderId: String(order.orderId || order._id),
+        },
+      }).catch((notifErr) => {
+        console.error('[checkSingleOrder Push Error]:', notifErr.message);
+      });
+    }
+  }
+
+  let message = 'تم فحص حالة الطلب من المزود بنجاح';
+  if (order.status === 'completed') {
+    message = 'الطلب مكتمل وتم إرسال إشعار للمستخدم 🚀';
+  } else if (order.status === 'failed') {
+    message = 'الطلب ملغي/فاشل وتم استرجاع الرصيد للمستخدم';
+  } else if (order.status === 'processing') {
+    message = 'الطلب ما زال قيد المعالجة لدى المزود';
+  } else if (isCustom) {
+    message = 'طلب مزود خاص (معالجة يدوية)';
   }
 
   return {
     order: enrichOrderWithInvoiceMeta(order),
     updated,
     status: order.status,
+    message,
   };
 };
 
