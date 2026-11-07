@@ -237,6 +237,53 @@ export const executePurchase = async ({
   }
 
   const validQuantity = Math.max(1, Number(quantity) || 1);
+
+  // Validate quantity against product/package minCount & maxCount
+  const rawPayload = activeItem?.rawPayload || {};
+  const rawMin =
+    rawPayload.min_count ??
+    rawPayload.minCount ??
+    rawPayload.min_qty ??
+    rawPayload.min ??
+    (rawPayload.qty_values && typeof rawPayload.qty_values === 'object' && !Array.isArray(rawPayload.qty_values) ? rawPayload.qty_values.min : null);
+  const rawMax =
+    rawPayload.max_count ??
+    rawPayload.maxCount ??
+    rawPayload.max_qty ??
+    rawPayload.max ??
+    (rawPayload.qty_values && typeof rawPayload.qty_values === 'object' && !Array.isArray(rawPayload.qty_values) ? rawPayload.qty_values.max : null);
+
+  const effectiveMin = rawMin && Number(rawMin) > 0
+    ? parseInt(rawMin, 10)
+    : (activeItem?.minCount && Number(activeItem.minCount) > 0 ? Number(activeItem.minCount) : 1);
+
+  const effectiveMax = rawMax && Number(rawMax) > 0
+    ? parseInt(rawMax, 10)
+    : (activeItem?.maxCount && Number(activeItem.maxCount) > 0 ? Number(activeItem.maxCount) : null);
+
+  const rawQtyValues = activeItem?.qtyValues || rawPayload.qty_values || rawPayload.qtyValues || null;
+  if (Array.isArray(rawQtyValues) && rawQtyValues.length > 0) {
+    const validValues = rawQtyValues.map(Number).filter((v) => !isNaN(v));
+    if (validValues.length > 0 && !validValues.includes(validQuantity)) {
+      throw new ApiError(
+        `الكمية غير صحيحة. القيم المتاحة هي: ${validValues.join(', ')}`,
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+  } else {
+    if (validQuantity < effectiveMin) {
+      throw new ApiError(
+        `الكمية غير صحيحة. أقل كمية مسموح بها لهذا المنتج هي ${effectiveMin}`,
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+    if (effectiveMax && validQuantity > effectiveMax) {
+      throw new ApiError(
+        `الكمية غير صحيحة. أقصى كمية مسموح بها لهذا المنتج هي ${effectiveMax}`,
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+  }
   const totalUserPrice = Number((resolvedUnitSellingPrice * validQuantity).toFixed(4));
   const totalCost = Number((unitCost * validQuantity).toFixed(4));
   const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));

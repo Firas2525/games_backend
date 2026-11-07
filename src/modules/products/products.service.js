@@ -2004,6 +2004,68 @@ export const getProductDetails = async (id, userCurrency = null) => {
   const { catMap, subCatMap } = profitMaps;
   const profitPercentage = resolveProductProfitPercentage(product, globalProfitPercentage, catMap, subCatMap);
 
+  const isUserSyp = Boolean(
+    userCurrency &&
+      (String(userCurrency).toUpperCase().includes('SYP') ||
+        String(userCurrency).includes('ل.س') ||
+        String(userCurrency).includes('ليرة'))
+  );
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+  // Helper to extract true min, max, qtyValues from package / rawPayload
+  const resolvePackageCounts = (pkg) => {
+    const raw = pkg.rawPayload || {};
+    const rawMin =
+      raw.min_count ??
+      raw.minCount ??
+      raw.min_qty ??
+      raw.min ??
+      (raw.qty_values && typeof raw.qty_values === 'object' && !Array.isArray(raw.qty_values)
+        ? raw.qty_values.min
+        : null);
+
+    const rawMax =
+      raw.max_count ??
+      raw.maxCount ??
+      raw.max_qty ??
+      raw.max ??
+      (raw.qty_values && typeof raw.qty_values === 'object' && !Array.isArray(raw.qty_values)
+        ? raw.qty_values.max
+        : null);
+
+    const parsedRawMin =
+      rawMin !== null && rawMin !== undefined && !isNaN(Number(rawMin))
+        ? parseInt(rawMin, 10)
+        : null;
+    const parsedRawMax =
+      rawMax !== null && rawMax !== undefined && !isNaN(Number(rawMax))
+        ? parseInt(rawMax, 10)
+        : null;
+
+    let minCount = 1;
+    if (pkg.minCount && Number(pkg.minCount) > 1) {
+      minCount = Number(pkg.minCount);
+    } else if (parsedRawMin && parsedRawMin > 0) {
+      minCount = parsedRawMin;
+    } else {
+      minCount = pkg.minCount || 1;
+    }
+
+    let maxCount = null;
+    if (pkg.maxCount !== null && pkg.maxCount !== undefined && Number(pkg.maxCount) > 0) {
+      maxCount = Number(pkg.maxCount);
+    } else if (parsedRawMax && parsedRawMax > 0) {
+      maxCount = parsedRawMax;
+    }
+
+    const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
+    const qtyValues = Array.isArray(rawQtyValues)
+      ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
+      : null;
+
+    return { minCount, maxCount, qtyValues };
+  };
+
   // 1. If provider is SW Games (رؤيا - ROYA_USD / ROYA_SYP)
   if (
     product.source === 'roya_usd' ||
@@ -2015,26 +2077,23 @@ export const getProductDetails = async (id, userCurrency = null) => {
       source: product.source, // Keep strictly within the exact source & currency
       isAvailable: { $ne: false },
     };
+    if (product.subCategoryId) {
+      categoryQuery.subCategoryId = product.subCategoryId;
+    }
 
     const allCategoryProducts = await Product.find(categoryQuery)
       .sort({ price: 1, name: 1 })
       .lean();
 
-    const list = allCategoryProducts.length > 0 ? allCategoryProducts : [product];
+    const hasCurrent = allCategoryProducts.some(
+      (p) => p._id.toString() === product._id.toString()
+    );
+    const list = hasCurrent
+      ? allCategoryProducts
+      : [product, ...allCategoryProducts];
 
     const packages = list.map((pkg) => {
-      const raw = pkg.rawPayload || {};
-      const minCount = pkg.minCount || (raw.minCount ? parseInt(raw.minCount) : 1);
-      const maxCount =
-        pkg.maxCount !== undefined && pkg.maxCount !== null
-          ? pkg.maxCount
-          : raw.maxCount
-            ? parseInt(raw.maxCount)
-            : null;
-      const rawQtyValues = pkg.qtyValues || raw.qty_values || raw.qtyValues || null;
-      const qtyValues = Array.isArray(rawQtyValues)
-        ? rawQtyValues.map(Number).filter((v) => !isNaN(v))
-        : null;
+      const { minCount, maxCount, qtyValues } = resolvePackageCounts(pkg);
 
       // Clean package title like the legacy clean_name
       let packageTitle = cleanName(pkg.name);
@@ -2074,7 +2133,7 @@ export const getProductDetails = async (id, userCurrency = null) => {
         discountPercent,
         costPrice: baseCost,
         originalPrice: baseCost,
-        currency: isUserSyp ? '\u0644.\u0633' : (pkg.currency || '$'),
+        currency: isUserSyp ? 'ل.س' : (pkg.currency || '$'),
         params: (pkg.requiredFields || []).map(
           (f) => f.label || f.key || 'ايدي اللاعب'
         ),
@@ -2086,8 +2145,14 @@ export const getProductDetails = async (id, userCurrency = null) => {
       };
     });
 
+    const rootCounts = resolvePackageCounts(product);
     return {
-      product,
+      product: {
+        ...product,
+        minCount: rootCounts.minCount,
+        maxCount: rootCounts.maxCount,
+        qtyValues: rootCounts.qtyValues,
+      },
       source: product.source,
       packages,
     };
@@ -2217,16 +2282,13 @@ export const getProductDetails = async (id, userCurrency = null) => {
       ? calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100))
       : fallbackPriceBeforeDiscount;
 
-  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
-
   let resolvedCustomCurrency = (product.currency === 'BOTH' || product.currency === 'ALL' || !product.currency) ? '$' : product.currency;
   let customBaseCost = fallbackBaseCost;
   let customPriceBefore = fallbackPriceBeforeDiscount;
   let customUserPrice = fallbackUserPrice;
 
   if (isUserSyp) {
-    resolvedCustomCurrency = '\u0644.\u0633';
+    resolvedCustomCurrency = 'ل.س';
     if (isCustom && (product.currency === '$' || product.currency === 'USD' || !product.currency || product.currency === 'BOTH' || product.currency === 'ALL')) {
       customBaseCost = Math.round(fallbackBaseCost * exchangeRate);
       customPriceBefore = Math.round(fallbackPriceBeforeDiscount * exchangeRate);
@@ -2235,6 +2297,9 @@ export const getProductDetails = async (id, userCurrency = null) => {
         : customPriceBefore;
     }
   }
+
+  const fallbackCounts = resolvePackageCounts(product);
+
   return {
     product: {
       ...(product.toObject ? product.toObject() : product),
@@ -2242,6 +2307,9 @@ export const getProductDetails = async (id, userCurrency = null) => {
       price: customUserPrice,
       priceBeforeDiscount: discountPercent > 0 ? customPriceBefore : null,
       discountPercent,
+      minCount: fallbackCounts.minCount,
+      maxCount: fallbackCounts.maxCount,
+      qtyValues: fallbackCounts.qtyValues,
     },
     source: product.source,
     packages: [
@@ -2257,12 +2325,12 @@ export const getProductDetails = async (id, userCurrency = null) => {
         costPrice: customBaseCost,
         originalPrice: customBaseCost,
         currency: resolvedCustomCurrency,
-        params: product.requiredFields.map((f) => f.label || f.key || 'Player_ID'),
+        params: (product.requiredFields || []).map((f) => f.label || f.key || 'Player_ID'),
         categoryName: product.category,
         available: product.isAvailable,
-        minCount: product.minCount || 1,
-        maxCount: product.maxCount || null,
-        qtyValues: product.qtyValues || null,
+        minCount: fallbackCounts.minCount,
+        maxCount: fallbackCounts.maxCount,
+        qtyValues: fallbackCounts.qtyValues,
       },
     ],
   };

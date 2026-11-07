@@ -49,8 +49,22 @@ export const normalizeSwGamesProduct = (
   sourceKey = 'roya_usd',
   sourceName = 'رؤيا دولار'
 ) => {
-  const minCount = item.minCount ? parseInt(item.minCount) : 1;
-  const maxCount = item.maxCount ? parseInt(item.maxCount) : null;
+  const rawMin =
+    item.min_count ??
+    item.minCount ??
+    item.min_qty ??
+    item.min ??
+    (item.qty_values && typeof item.qty_values === 'object' && !Array.isArray(item.qty_values) ? item.qty_values.min : null);
+
+  const rawMax =
+    item.max_count ??
+    item.maxCount ??
+    item.max_qty ??
+    item.max ??
+    (item.qty_values && typeof item.qty_values === 'object' && !Array.isArray(item.qty_values) ? item.qty_values.max : null);
+
+  const minCount = rawMin && !isNaN(Number(rawMin)) ? parseInt(rawMin, 10) : 1;
+  const maxCount = rawMax && !isNaN(Number(rawMax)) ? parseInt(rawMax, 10) : null;
   const rawQtyValues = item.qty_values || item.qtyValues || null;
   const qtyValues = Array.isArray(rawQtyValues)
     ? rawQtyValues.map((v) => Number(v)).filter((v) => !isNaN(v))
