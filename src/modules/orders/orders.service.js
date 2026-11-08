@@ -9,6 +9,7 @@ import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
+import { formatGmt3String } from '../../utils/time.js';
 import {
   dispatchProviderOrder,
   checkExternalOrderStatus,
@@ -17,6 +18,7 @@ import {
   extractOrderDeliveryDetails,
   extractOrderImages,
   formatDurationArabic,
+  resolveOrderCompletionMeta,
 } from './providerDispatch.service.js';
 
 export const enrichOrderWithInvoiceMeta = (rawOrder) => {
@@ -27,22 +29,20 @@ export const enrichOrderWithInvoiceMeta = (rawOrder) => {
   }
 
   const isCompleted = o.status === 'completed';
-  const completedAt = isCompleted
-    ? (o.completedAt || o.providerResponse?.completedAt || o.updatedAt || o.createdAt)
-    : null;
+  let completedAt = o.completedAt || null;
+  let executionDurationSeconds = o.executionDurationSeconds ?? null;
+  let executionDurationText = o.executionDurationText || '';
 
-  let executionDurationSeconds = null;
-  let executionDurationText = '';
-  if (isCompleted && o.createdAt && completedAt) {
-    const startMs = new Date(o.createdAt).getTime();
-    const endMs = new Date(completedAt).getTime();
-    if (!isNaN(startMs) && !isNaN(endMs)) {
-      executionDurationSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
-      executionDurationText = formatDurationArabic(executionDurationSeconds);
+  if (isCompleted) {
+    if (!executionDurationSeconds || !executionDurationText || !completedAt) {
+      const meta = resolveOrderCompletionMeta(o, o.providerResponse);
+      completedAt = completedAt || meta.completedAt;
+      executionDurationSeconds = executionDurationSeconds ?? meta.executionDurationSeconds;
+      executionDurationText = executionDurationText || meta.executionDurationText;
     }
   }
 
-  const deliveryDetails = isCompleted ? extractOrderDeliveryDetails(o) : (extractOrderDeliveryDetails(o) || '');
+  const deliveryDetails = extractOrderDeliveryDetails(o) || '';
   const responseImages = extractOrderImages(o);
   const qty = Math.max(1, Number(o.quantity) || 1);
   const totalUserPrice = Number(o.userPrice ?? o.price ?? 0);
@@ -51,6 +51,8 @@ export const enrichOrderWithInvoiceMeta = (rawOrder) => {
   return {
     ...o,
     completedAt,
+    createdAtGmt3: formatGmt3String(o.createdAt),
+    completedAtGmt3: formatGmt3String(completedAt),
     executionDurationSeconds,
     executionDurationText,
     deliveryDetails,
@@ -404,6 +406,12 @@ export const executePurchase = async ({
 
   // 8. Create Order Record with full execution details (Successful / Processing Order)
   const initialStatus = dispatchResult.status || 'processing';
+  const isImmediatelyCompleted = initialStatus === 'completed';
+  const purchaseSec = isImmediatelyCompleted
+    ? Math.max(1, Math.round((Date.now() - startTime) / 1000))
+    : null;
+  const purchaseText = purchaseSec ? formatDurationArabic(purchaseSec) : '';
+
   const order = await Order.create({
     orderId,
     userId: user._id,
@@ -422,7 +430,9 @@ export const executePurchase = async ({
     discountPercent,
     currency: effectiveCurrency,
     status: initialStatus,
-    completedAt: initialStatus === 'completed' ? new Date() : null,
+    completedAt: isImmediatelyCompleted ? new Date() : null,
+    executionDurationSeconds: purchaseSec,
+    executionDurationText: purchaseText,
     providerOrderId: dispatchResult.providerOrderId || '',
     providerPayload: dispatchResult.providerPayload || basePayload,
     providerResponse: dispatchResult.providerResponse || null,
@@ -630,9 +640,12 @@ export const syncOrdersBatch = async (ordersList) => {
             updatedCount++;
           } else if (res.status === 'completed' && order.status !== 'completed') {
             order.status = 'completed';
-            order.completedAt = order.completedAt || new Date();
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+            const meta = resolveOrderCompletionMeta(order, res.rawData);
+            order.completedAt = meta.completedAt;
+            order.executionDurationSeconds = meta.executionDurationSeconds;
+            order.executionDurationText = meta.executionDurationText;
             await order.save();
             sendDirectUserNotification(order.userId, {
               title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -663,9 +676,12 @@ export const syncOrdersBatch = async (ordersList) => {
             updatedCount++;
           } else if (res.status === 'completed' && order.status !== 'completed') {
             order.status = 'completed';
-            order.completedAt = order.completedAt || new Date();
             if (res.rawData) order.providerResponse = res.rawData;
             if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+            const meta = resolveOrderCompletionMeta(order, res.rawData);
+            order.completedAt = meta.completedAt;
+            order.executionDurationSeconds = meta.executionDurationSeconds;
+            order.executionDurationText = meta.executionDurationText;
             await order.save();
             sendDirectUserNotification(order.userId, {
               title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -694,8 +710,11 @@ export const syncOrdersBatch = async (ordersList) => {
           updatedCount++;
         } else if (checkResult.status === 'completed') {
           order.status = 'completed';
-          order.completedAt = order.completedAt || new Date();
           if (checkResult.rawData) order.providerResponse = checkResult.rawData;
+          const meta = resolveOrderCompletionMeta(order, checkResult.rawData);
+          order.completedAt = meta.completedAt;
+          order.executionDurationSeconds = meta.executionDurationSeconds;
+          order.executionDurationText = meta.executionDurationText;
           await order.save();
             sendDirectUserNotification(order.userId, {
               title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -998,13 +1017,16 @@ export const checkSingleOrder = async (orderId) => {
           await refundOrderWallet(order, res);
           updated = true;
         } else if (res.status === 'completed') {
-          if (order.status !== 'completed') {
-            order.status = 'completed';
-            order.completedAt = order.completedAt || new Date();
-            updated = true;
-          }
           if (res.rawData) order.providerResponse = res.rawData;
           if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
+          if (order.status !== 'completed' || !order.executionDurationSeconds) {
+            order.status = 'completed';
+            const meta = resolveOrderCompletionMeta(order, res.rawData);
+            order.completedAt = meta.completedAt;
+            order.executionDurationSeconds = meta.executionDurationSeconds;
+            order.executionDurationText = meta.executionDurationText;
+            updated = true;
+          }
           await order.save();
         }
       }
@@ -1019,12 +1041,15 @@ export const checkSingleOrder = async (orderId) => {
           await refundOrderWallet(order, checkResult);
           updated = true;
         } else if (checkResult.status === 'completed') {
-          if (order.status !== 'completed') {
+          if (checkResult.rawData) order.providerResponse = checkResult.rawData;
+          if (order.status !== 'completed' || !order.executionDurationSeconds) {
             order.status = 'completed';
-            order.completedAt = order.completedAt || new Date();
+            const meta = resolveOrderCompletionMeta(order, checkResult.rawData);
+            order.completedAt = meta.completedAt;
+            order.executionDurationSeconds = meta.executionDurationSeconds;
+            order.executionDurationText = meta.executionDurationText;
             updated = true;
           }
-          if (checkResult.rawData) order.providerResponse = checkResult.rawData;
           await order.save();
         }
       }
@@ -1266,6 +1291,12 @@ export const completeCustomOrder = async (orderId, { adminNote = '', responseDat
 
   order.status = 'completed';
   order.completedAt = order.completedAt || new Date();
+  const diffSec = Math.max(
+    1,
+    Math.round((order.completedAt.getTime() - new Date(order.createdAt).getTime()) / 1000)
+  );
+  order.executionDurationSeconds = diffSec;
+  order.executionDurationText = formatDurationArabic(diffSec);
   order.providerResponse = {
     ...(order.providerResponse || {}),
     adminNote: adminNote ? adminNote.trim() : '',
@@ -1861,5 +1892,37 @@ export const getProfitReportsAdmin = async (query = {}) => {
     topProducts: topProductsUsd,
     categories: categoriesUsd,
   };
+};
+
+let isBackgroundSyncRunning = false;
+
+/**
+ * Periodically polls external providers for pending/processing orders.
+ * Runs every 20 seconds so orders are marked completed almost immediately,
+ * preventing polling delay from inflating execution durations.
+ */
+export const startBackgroundOrderSyncWorker = () => {
+  console.log('🔄 [OrderSyncWorker] Started automatic background order sync (every 20s)');
+  setInterval(async () => {
+    if (isBackgroundSyncRunning) return;
+    try {
+      isBackgroundSyncRunning = true;
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000); // Last 48 hours
+      const pendingOrders = await Order.find({
+        status: { $in: ['processing', 'pending', 'wait'] },
+        refunded: false,
+        source: { $in: ['roya_usd', 'roya_syp', 'brand1card', 'auto1card', 'sw_games'] },
+        createdAt: { $gte: cutoff },
+      }).limit(50);
+
+      if (pendingOrders.length > 0) {
+        await syncOrdersBatch(pendingOrders);
+      }
+    } catch (err) {
+      // background silent catch
+    } finally {
+      isBackgroundSyncRunning = false;
+    }
+  }, 20000);
 };
 

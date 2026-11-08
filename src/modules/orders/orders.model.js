@@ -107,6 +107,14 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    executionDurationSeconds: {
+      type: Number,
+      default: null,
+    },
+    executionDurationText: {
+      type: String,
+      default: '',
+    },
   },
   {
     timestamps: true,

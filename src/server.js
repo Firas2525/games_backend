@@ -3,6 +3,7 @@ import { connectDB } from './config/db.js';
 import { ENV } from './config/env.js';
 import { autoSyncOnStartup } from './modules/products/products.service.js';
 import { ensureShortUserCodes } from './modules/users/users.service.js';
+import { startBackgroundOrderSyncWorker } from './modules/orders/orders.service.js';
 
 const startServer = async () => {
   // Connect to Database
@@ -13,6 +14,9 @@ const startServer = async () => {
 
   // Run catalog synchronization & categorization on startup
   autoSyncOnStartup();
+
+  // Start background order sync worker for real-time order completion
+  startBackgroundOrderSyncWorker();
 
   // Listen on PORT (Render sets process.env.PORT automatically)
   const server = app.listen(ENV.PORT, () => {
