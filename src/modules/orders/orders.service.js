@@ -505,6 +505,7 @@ export const executePurchase = async ({
     console.error('[Cashback Award Error]:', coinErr);
   }
 
+  clearAdminOrdersCache();
   return {
     order: enrichOrderWithInvoiceMeta(order),
     transaction: transaction.toJSON(),
@@ -595,6 +596,7 @@ export const refundOrderWallet = async (order, resultData = null, customNote = '
     },
   }).catch((err) => console.error('[Refund Push Error]:', err.message));
 
+  clearAdminOrdersCache();
   return true;
 };
 
@@ -767,6 +769,14 @@ export const getUserOrders = async (userId) => {
   return orders.map(enrichOrderWithInvoiceMeta);
 };
 
+// Lightweight In-Memory Aggregate & Count Cache for Admin Orders
+const adminAggCache = new Map();
+const ADMIN_AGG_CACHE_TTL = 30 * 1000; // 30 seconds
+
+export const clearAdminOrdersCache = () => {
+  adminAggCache.clear();
+};
+
 export const getAllOrdersAdmin = async (query = {}) => {
   const filter = {};
 
@@ -880,84 +890,128 @@ export const getAllOrdersAdmin = async (query = {}) => {
 
   // 6. Pagination
   const page = parseInt(query.page, 10) || 1;
-  const limit = query.limit === 'all' ? 1000 : (parseInt(query.limit, 10) || 100);
+  const limit = query.limit === 'all' ? 1000 : (parseInt(query.limit, 10) || 50);
   const skip = (page - 1) * limit;
 
   // 7. Base filter for status counts (without status constraint)
   const baseFilterWithoutStatus = { ...filter };
   delete baseFilterWithoutStatus.status;
 
-  const [orders, total, statusAgg, financialAgg] = await Promise.all([
-    Order.find(filter)
-      .populate('userId', 'name email phone avatar balance currency userCode')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
-    Order.countDocuments(filter),
-    Order.aggregate([
-      { $match: baseFilterWithoutStatus },
-      { $group: { _id: '$status', count: { $sum: 1 } } },
-    ]),
-    Order.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: {
-            isSyp: {
-              $or: [
-                { $eq: ['$currency', 'SYP'] },
-                { $eq: ['$currency', 'syp'] },
-                { $eq: ['$currency', 'ل.س'] },
-              ],
+  const cacheKey = JSON.stringify({
+    userId: query.userId || '',
+    status: query.status || 'all',
+    source: query.source || 'all',
+    date: query.date || 'today',
+    startDate: query.startDate || '',
+    endDate: query.endDate || '',
+    search: query.search ? query.search.trim().toLowerCase() : '',
+  });
+
+  const now = Date.now();
+  const cachedMeta = adminAggCache.get(cacheKey);
+  const isCacheValid = cachedMeta && (now - cachedMeta.timestamp < ADMIN_AGG_CACHE_TTL);
+
+  const ordersPromise = Order.find(filter)
+    .populate('userId', 'name email phone avatar balance currency userCode')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+
+  let orders;
+  let total;
+  let counts;
+  let stats;
+
+  if (isCacheValid) {
+    orders = await ordersPromise;
+    total = cachedMeta.total;
+    counts = cachedMeta.counts;
+    stats = cachedMeta.stats;
+  } else {
+    const [fetchedOrders, fetchedTotal, statusAgg, financialAgg] = await Promise.all([
+      ordersPromise,
+      Order.countDocuments(filter),
+      Order.aggregate([
+        { $match: baseFilterWithoutStatus },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Order.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: {
+              isSyp: {
+                $or: [
+                  { $eq: ['$currency', 'SYP'] },
+                  { $eq: ['$currency', 'syp'] },
+                  { $eq: ['$currency', 'ل.س'] },
+                ],
+              },
             },
+            totalRevenue: { $sum: '$userPrice' },
+            totalCost: { $sum: '$costPrice' },
+            totalProfit: { $sum: '$profit' },
+            count: { $sum: 1 },
           },
-          totalRevenue: { $sum: '$userPrice' },
-          totalCost: { $sum: '$costPrice' },
-          totalProfit: { $sum: '$profit' },
-          count: { $sum: 1 },
         },
-      },
-    ]),
-  ]);
+      ]),
+    ]);
 
-  const counts = {
-    all: 0,
-    pending: 0,
-    processing: 0,
-    completed: 0,
-    failed: 0,
-    cancelled: 0,
-  };
+    orders = fetchedOrders;
+    total = fetchedTotal;
 
-  for (const item of statusAgg) {
-    if (item._id && counts[item._id] !== undefined) {
-      counts[item._id] = item.count;
+    counts = {
+      all: 0,
+      pending: 0,
+      processing: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+
+    for (const item of statusAgg) {
+      if (item._id && counts[item._id] !== undefined) {
+        counts[item._id] = item.count;
+      }
+      counts.all += item.count;
     }
-    counts.all += item.count;
-  }
 
-  const stats = {
-    usd: { revenue: 0, cost: 0, profit: 0, count: 0 },
-    syp: { revenue: 0, cost: 0, profit: 0, count: 0 },
-  };
+    stats = {
+      usd: { revenue: 0, cost: 0, profit: 0, count: 0 },
+      syp: { revenue: 0, cost: 0, profit: 0, count: 0 },
+    };
 
-  for (const f of financialAgg) {
-    if (f._id?.isSyp) {
-      stats.syp = {
-        revenue: Math.round(f.totalRevenue || 0),
-        cost: Math.round(f.totalCost || 0),
-        profit: Math.round(f.totalProfit || 0),
-        count: f.count || 0,
-      };
-    } else {
-      stats.usd = {
-        revenue: Number((f.totalRevenue || 0).toFixed(2)),
-        cost: Number((f.totalCost || 0).toFixed(2)),
-        profit: Number((f.totalProfit || 0).toFixed(2)),
-        count: f.count || 0,
-      };
+    for (const f of financialAgg) {
+      if (f._id?.isSyp) {
+        stats.syp = {
+          revenue: Math.round(f.totalRevenue || 0),
+          cost: Math.round(f.totalCost || 0),
+          profit: Math.round(f.totalProfit || 0),
+          count: f.count || 0,
+        };
+      } else {
+        stats.usd = {
+          revenue: Number((f.totalRevenue || 0).toFixed(2)),
+          cost: Number((f.totalCost || 0).toFixed(2)),
+          profit: Number((f.totalProfit || 0).toFixed(2)),
+          count: f.count || 0,
+        };
+      }
     }
+
+    // Keep cache bounded
+    if (adminAggCache.size > 200) {
+      const oldestKey = adminAggCache.keys().next().value;
+      adminAggCache.delete(oldestKey);
+    }
+
+    adminAggCache.set(cacheKey, {
+      total,
+      counts,
+      stats,
+      timestamp: now,
+    });
   }
 
   const enrichedOrders = orders.map(enrichOrderWithInvoiceMeta);
@@ -1086,6 +1140,7 @@ export const checkSingleOrder = async (orderId) => {
     message = 'طلب مزود خاص (معالجة يدوية)';
   }
 
+  clearAdminOrdersCache();
   return {
     order: enrichOrderWithInvoiceMeta(order),
     updated,

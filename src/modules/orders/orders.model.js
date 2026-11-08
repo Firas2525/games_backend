@@ -145,4 +145,12 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
+// High-performance compound indexes for Admin and User order queries
+orderSchema.index({ createdAt: -1 });
+orderSchema.index({ status: 1, createdAt: -1 });
+orderSchema.index({ userId: 1, createdAt: -1 });
+orderSchema.index({ source: 1, createdAt: -1 });
+orderSchema.index({ source: 1, status: 1, createdAt: -1 });
+orderSchema.index({ providerOrderId: 1 });
+
 export const Order = mongoose.model('Order', orderSchema);
