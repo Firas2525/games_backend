@@ -863,48 +863,49 @@ export const buildCurrencyProductFilter = (currencyStr) => {
 
   const c = String(currencyStr).trim().toUpperCase();
   if (c === 'SYP' || c === 'ل.س' || c === 'ليرة' || c === 'SYRIAN POUND') {
-    // SYP USER: Strict isolation for providers (Roya SYP + Custom SYP only, Syria Card & Dollar excluded)
+    // SYP USER: Strict isolation:
+    // Only Roya SYP (roya_syp) and Custom products.
+    // Roya USD (roya_usd), Brand 1 Card (brand1card), and legacy sw_games are strictly excluded.
     return {
       $and: [
         syriaCardExclude,
         {
+          source: { $nin: ['roya_usd', 'sw_games', 'brand1card'] },
+        },
+        {
+          currency: { $nin: ['$', 'USD', 'usd'] },
+        },
+        {
           $or: [
-            {
-              $and: [
-                { source: { $nin: ['roya_usd', 'sw_games', 'brand1card'] } },
-                { currency: { $nin: ['$', 'USD', 'usd'] } },
-                {
-                  $or: [
-                    { source: 'roya_syp' },
-                    { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL'] } },
-                    { sourceName: { $regex: 'ليرة', $options: 'i' } },
-                  ],
-                },
-              ],
-            },
-            {
-              source: 'custom',
-              // All custom products visible and converted for SYP
-            },
+            { source: 'roya_syp' },
+            { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] } },
+            { sourceName: { $regex: 'ليرة', $options: 'i' } },
+            { source: 'custom' },
           ],
         },
       ],
     };
   }
+
   if (c === 'USD' || c === '$' || c === 'دولار') {
-    // USD USER: Strict isolation for providers (Roya USD + Brand 1 Card + Custom USD, Syria Card excluded)
+    // USD USER: Strict isolation:
+    // Only Roya USD (roya_usd), Brand 1 Card (brand1card), and Custom USD products.
+    // Roya SYP (roya_syp) and any Lira product are strictly excluded.
     return {
       $and: [
         syriaCardExclude,
         {
+          source: { $nin: ['roya_syp'] },
+        },
+        {
+          currency: { $nin: ['ل.س', 'SYP', 'syp'] },
+        },
+        {
+          sourceName: { $not: { $regex: 'ليرة', $options: 'i' } },
+        },
+        {
           $or: [
-            {
-              $and: [
-                { source: { $nin: ['roya_syp', 'syria_card', 'auto1card'] } },
-                { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
-                { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
-              ],
-            },
+            { source: { $in: ['roya_usd', 'brand1card', 'sw_games'] } },
             {
               source: 'custom',
               $or: [
@@ -919,6 +920,7 @@ export const buildCurrencyProductFilter = (currencyStr) => {
       ],
     };
   }
+
   return syriaCardExclude;
 };
 
@@ -1447,10 +1449,14 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
 
   const andList = [{ $or: matchClauses }];
 
-  // For regular users, only count visible and available products
+  // For regular users, only count visible, available, and currency-matching products
   if (!isAdmin) {
     andList.push({ isAvailable: { $ne: false } });
     andList.push({ isVisible: { $ne: false } });
+    const currencyFilter = buildCurrencyProductFilter(userCurrency);
+    if (currencyFilter) {
+      andList.push(currencyFilter);
+    }
   }
 
   const productMatch = andList.length === 1 ? andList[0] : { $and: andList };
@@ -1837,7 +1843,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   ];
 
   const currencyFilter = buildCurrencyProductFilter(userCurrency || query.currency);
-  if (currencyFilter && (!query.subCategoryId || query.subCategoryId === 'all')) {
+  if (currencyFilter) {
     andClauses.push(currencyFilter);
   }
 
@@ -2047,6 +2053,31 @@ export const getProductDetails = async (id, userCurrency = null) => {
         String(userCurrency).includes('ليرة'))
   );
   const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+
+  if (userCurrency) {
+    if (!isUserSyp) {
+      // USD user: strictly block Roya SYP or Syrian Lira products
+      const isProductSyp =
+        product.source === 'roya_syp' ||
+        product.currency === 'ل.س' ||
+        (product.currency || '').toUpperCase() === 'SYP' ||
+        /ليرة/i.test(product.sourceName || '');
+      if (isProductSyp) {
+        throw new ApiError('عذراً، هذا المنتج متاح فقط لحسابات الليرة السورية', HTTP_STATUS.FORBIDDEN);
+      }
+    } else {
+      // SYP user: strictly block Roya USD, Brand 1 Card
+      const isProductUsd =
+        product.source === 'roya_usd' ||
+        product.source === 'sw_games' ||
+        product.source === 'brand1card' ||
+        product.currency === '$' ||
+        (product.currency || '').toUpperCase() === 'USD';
+      if (isProductUsd) {
+        throw new ApiError('عذراً، هذا المنتج متاح فقط لحسابات الدولار ($)', HTTP_STATUS.FORBIDDEN);
+      }
+    }
+  }
 
   // Helper to extract true min, max, qtyValues from package / rawPayload
   const resolvePackageCounts = (pkg) => {
