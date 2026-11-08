@@ -12,14 +12,36 @@ export const getAllUsers = async (query = {}) => {
   const filter = {};
   if (query.role) filter.role = query.role;
   if (query.search) {
-    const s = query.search.trim().replace(/^#/, '');
-    filter.$or = [
+    const raw = query.search.trim();
+    const stripped = raw.replace(/^#/, '').replace(/^id[:\s\-]*/i, '').trim();
+    const s = stripped.length > 0 ? stripped : raw;
+    const isHex24 = /^[0-9a-fA-F]{24}$/.test(s);
+
+    const conditions = [
       { name: { $regex: s, $options: 'i' } },
       { email: { $regex: s, $options: 'i' } },
       { phone: { $regex: s, $options: 'i' } },
       { userCode: { $regex: s, $options: 'i' } },
-      ...(mongoose.isValidObjectId(s) ? [{ _id: s }] : []),
     ];
+
+    if (isHex24 || mongoose.isValidObjectId(s)) {
+      conditions.push({ _id: s });
+    }
+
+    // Support partial matching on MongoDB ObjectId string
+    if (s.length >= 3 && /^[0-9a-fA-F]+$/.test(s)) {
+      conditions.push({
+        $expr: {
+          $regexMatch: {
+            input: { $toString: '$_id' },
+            regex: s,
+            options: 'i',
+          },
+        },
+      });
+    }
+
+    filter.$or = conditions;
   }
   return await User.find(filter).sort({ createdAt: -1 });
 };
