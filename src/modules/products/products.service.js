@@ -820,6 +820,40 @@ export const ensureDefaultCategories = async () => {
   if (count === 0) {
     await Category.insertMany(DEFAULT_MAIN_CATEGORIES);
   }
+  await ensureSubcategoryProductsVisible();
+};
+
+let isAutoRepairDone = false;
+export const ensureSubcategoryProductsVisible = async () => {
+  if (isAutoRepairDone) return;
+  try {
+    // Automatically repair and enable all products organized into subcategories by Admin
+    const result = await Product.updateMany(
+      {
+        $or: [
+          { subCategoryId: { $ne: null } },
+          { isCategoryOverridden: true },
+        ],
+        category: { $ne: 'العناصر الجديدة' },
+        $or: [
+          { isVisible: false },
+          { isVisible: { $exists: false } },
+          { isAvailable: false },
+        ],
+      },
+      {
+        $set: { isVisible: true, isAvailable: true },
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(`[Auto-Repair] Successfully enabled ${result.modifiedCount} products organized in subcategories by Admin.`);
+      serverCache.clearAll();
+    }
+    isAutoRepairDone = true;
+  } catch (err) {
+    console.error('ensureSubcategoryProductsVisible error:', err.message);
+  }
 };
 
 // Helper: Build query filter matching user currency (Lira vs Dollar separation)
@@ -1087,7 +1121,11 @@ export const bulkUpdateProductsCategory = async (productIds, dataOrMainCat) => {
     throw new ApiError('يجب تحديد عنصر واحد على الأقل لنقله', HTTP_STATUS.BAD_REQUEST);
   }
 
-  const updateFields = { isCategoryOverridden: true };
+  const updateFields = {
+    isCategoryOverridden: true,
+    isVisible: true,
+    isAvailable: true,
+  };
 
   if (subCategoryId) {
     const targetSub = await SubCategory.findById(subCategoryId);
@@ -1321,6 +1359,8 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
 
 // 6.3 Sub-Categories Management (Groups / Folders within a Main Category - High-Speed Cached)
 export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined, isAdmin = false) => {
+  await ensureSubcategoryProductsVisible();
+
   const cacheKey = `subcats_${mainCategory || 'all'}_${parentId || 'root'}_${userCurrency || 'all'}`;
   if (!isAdmin) {
     const cached = serverCache.get(cacheKey);
@@ -1406,19 +1446,11 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   }
 
   const andList = [{ $or: matchClauses }];
-  if (mainCategory && mainCategory !== 'all') {
-    andList.push({ mainCategory });
-  }
 
-  // For regular users, only count visible, available, and currency-matched products.
-  // For Admins, count all products accurately so the folder counter matches the admin folder view.
+  // For regular users, only count visible and available products
   if (!isAdmin) {
     andList.push({ isAvailable: { $ne: false } });
     andList.push({ isVisible: { $ne: false } });
-    const currencyFilter = buildCurrencyProductFilter(userCurrency);
-    if (currencyFilter) {
-      andList.push(currencyFilter);
-    }
   }
 
   const productMatch = andList.length === 1 ? andList[0] : { $and: andList };
@@ -1427,7 +1459,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     'id _id name image price sellingPrice originalPrice currency isAvailable isVisible subCategoryId subCategoryName category source'
   ).lean();
 
-  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('ل.س') || String(userCurrency).includes('ليرة')));
   const settings = await getSettings();
   const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
   const productsBySubId = {};
@@ -1441,7 +1473,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
         if (p.sellingPrice) p.sellingPrice = Math.round(p.sellingPrice * exchangeRate);
         if (p.originalPrice) p.originalPrice = Math.round(p.originalPrice * exchangeRate);
       }
-      p.currency = '\u0644.\u0633';
+      p.currency = 'ل.س';
     }
     let sId = p.subCategoryId?.toString();
     if (!sId && p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
@@ -1490,7 +1522,11 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   });
 
   if (!isAdmin) {
-    result = result.filter((sc) => sc.name !== 'العناصر الجديدة' && sc.productCount > 0);
+    result = result.filter(
+      (sc) =>
+        sc.name !== 'العناصر الجديدة' &&
+        (sc.productCount > 0 || sc.childCount > 0 || sc.directCount > 0 || sc.totalProductCount > 0)
+    );
     serverCache.set(cacheKey, result, 60);
   }
   return result;
@@ -1801,7 +1837,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
   ];
 
   const currencyFilter = buildCurrencyProductFilter(userCurrency || query.currency);
-  if (currencyFilter) {
+  if (currencyFilter && (!query.subCategoryId || query.subCategoryId === 'all')) {
     andClauses.push(currencyFilter);
   }
 
@@ -1867,7 +1903,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
       }
     }
   }
-  if (query.mainCategory && query.mainCategory !== 'all') {
+  if (query.mainCategory && query.mainCategory !== 'all' && (!query.subCategoryId || query.subCategoryId === 'root' || query.subCategoryId === 'null')) {
     andClauses.push({ mainCategory: query.mainCategory });
   }
   if (query.search) {
