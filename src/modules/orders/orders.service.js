@@ -15,6 +15,7 @@ import {
   checkSwGamesOrdersBatch,
   mapProviderUserErrorMessage,
   extractOrderDeliveryDetails,
+  extractOrderImages,
   formatDurationArabic,
 } from './providerDispatch.service.js';
 
@@ -41,7 +42,8 @@ export const enrichOrderWithInvoiceMeta = (rawOrder) => {
     }
   }
 
-  const deliveryDetails = isCompleted ? extractOrderDeliveryDetails(o) : '';
+  const deliveryDetails = isCompleted ? extractOrderDeliveryDetails(o) : (extractOrderDeliveryDetails(o) || '');
+  const responseImages = extractOrderImages(o);
   const qty = Math.max(1, Number(o.quantity) || 1);
   const totalUserPrice = Number(o.userPrice ?? o.price ?? 0);
   const unitPrice = Number((totalUserPrice / qty).toFixed(4));
@@ -52,6 +54,7 @@ export const enrichOrderWithInvoiceMeta = (rawOrder) => {
     executionDurationSeconds,
     executionDurationText,
     deliveryDetails,
+    responseImages,
     unitPrice,
   };
 };

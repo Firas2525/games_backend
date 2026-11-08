@@ -791,7 +791,7 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
  * and Custom Provider (adminNote, responseData).
  */
 export function extractOrderDeliveryDetails(order) {
-  if (!order || order.status !== 'completed') return '';
+  if (!order) return '';
   const resp = order.providerResponse;
   if (!resp || typeof resp !== 'object') return '';
 
@@ -883,6 +883,46 @@ export function extractOrderDeliveryDetails(order) {
   }
 
   return Array.from(new Set(lines)).join('\n');
+}
+
+/**
+ * Extracts all response image URLs (proof, receipt, screenshot, attachments)
+ */
+export function extractOrderImages(order) {
+  if (!order) return [];
+  const images = new Set();
+  const isImg = (url) => {
+    if (!url || typeof url !== 'string') return false;
+    const s = url.trim().toLowerCase();
+    if (s.startsWith('data:image/')) return true;
+    if (s.includes('/uploads/') || s.includes('uploads/') || s.includes('/images/') || s.includes('/receipts/')) return true;
+    if (['cloudinary.com', 'imgur.com', 'postimg', 'imgbb', 'ibb.co', 'prnt.sc', 'discordapp'].some((p) => s.includes(p))) return true;
+    return /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff)(\?.*)?$/i.test(s);
+  };
+
+  const scan = (val) => {
+    if (!val) return;
+    if (typeof val === 'string') {
+      const urls = val.match(/(https?:\/\/[^\s<>"{}|\\^`]+|\/uploads\/[^\s<>"{}|\\^`]+|uploads\/[^\s<>"{}|\\^`]+|data:image\/[a-zA-Z0-9+]+;base64,[^\s<>"{}|\\^`]+)/gi);
+      if (urls) {
+        for (let u of urls) {
+          u = u.replace(/[.,;)>\]"\s]+$/, '');
+          if (isImg(u)) images.add(u);
+        }
+      } else if (isImg(val)) {
+        images.add(val.trim());
+      }
+    } else if (Array.isArray(val)) {
+      val.forEach(scan);
+    } else if (typeof val === 'object') {
+      Object.values(val).forEach(scan);
+    }
+  };
+
+  scan(order.providerResponse);
+  scan(order.deliveryDetails);
+  scan(order.extraFields);
+  return Array.from(images);
 }
 
 /**
