@@ -808,11 +808,56 @@ export function extractOrderDeliveryDetails(order) {
     'طلب قيد المعالجة اليدوية من قبل إدارة المتجر',
   ]);
 
+  const isImg = (url) => {
+    if (!url || typeof url !== 'string') return false;
+    const s = url.trim().toLowerCase();
+    if (s.startsWith('data:image/')) return true;
+    if (
+      s.includes('/uploads/') ||
+      s.includes('uploads/') ||
+      s.includes('/images/') ||
+      s.includes('/receipts/') ||
+      s.includes('/attachments/')
+    ) return true;
+    if (
+      s.includes('img.') ||
+      s.includes('image.') ||
+      s.includes('images.') ||
+      s.includes('pic.') ||
+      s.includes('pics.') ||
+      s.includes('photo.') ||
+      s.includes('photos.') ||
+      s.includes('screenshot.') ||
+      s.includes('voucher.') ||
+      s.includes('znet.tr') ||
+      ['cloudinary.com', 'imgur.com', 'postimg', 'imgbb', 'ibb.co', 'prnt.sc', 'discordapp', 'googleusercontent'].some((p) => s.includes(p))
+    ) return true;
+    if (
+      s.includes('/img.php') ||
+      s.includes('/image.php') ||
+      s.includes('/view.php') ||
+      s.includes('/show.php') ||
+      s.includes('/getimage') ||
+      s.includes('/showimage') ||
+      s.includes('/barcode') ||
+      s.includes('/qrcode')
+    ) return true;
+    return /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff)(\?.*)?$/i.test(s);
+  };
+
   const addLine = (val, label = '') => {
     if (val === null || val === undefined) return;
     if (typeof val === 'string' || typeof val === 'number') {
-      const s = String(val).trim();
+      let s = String(val).trim();
       if (!s || ignoredPhrases.has(s.toLowerCase())) return;
+
+      // If line is an image URL (e.g. "- -- http://img.znet.tr/Img.php?key=..."), don't pollute text delivery details
+      const urls = s.match(/(https?:\/\/[^\s<>"{}|\\^`]+|\/uploads\/[^\s<>"{}|\\^`]+|uploads\/[^\s<>"{}|\\^`]+)/gi);
+      if (urls && urls.some(isImg)) {
+        s = s.replace(/(https?:\/\/[^\s<>"{}|\\^`]+|\/uploads\/[^\s<>"{}|\\^`]+|uploads\/[^\s<>"{}|\\^`]+)/gi, '').replace(/[\s\-–—*#•:._]+/g, ' ').trim();
+        if (!s) return;
+      }
+
       lines.push(label ? `${label}: ${s}` : s);
     }
   };
@@ -895,8 +940,36 @@ export function extractOrderImages(order) {
     if (!url || typeof url !== 'string') return false;
     const s = url.trim().toLowerCase();
     if (s.startsWith('data:image/')) return true;
-    if (s.includes('/uploads/') || s.includes('uploads/') || s.includes('/images/') || s.includes('/receipts/')) return true;
-    if (['cloudinary.com', 'imgur.com', 'postimg', 'imgbb', 'ibb.co', 'prnt.sc', 'discordapp'].some((p) => s.includes(p))) return true;
+    if (
+      s.includes('/uploads/') ||
+      s.includes('uploads/') ||
+      s.includes('/images/') ||
+      s.includes('/receipts/') ||
+      s.includes('/attachments/')
+    ) return true;
+    if (
+      s.includes('img.') ||
+      s.includes('image.') ||
+      s.includes('images.') ||
+      s.includes('pic.') ||
+      s.includes('pics.') ||
+      s.includes('photo.') ||
+      s.includes('photos.') ||
+      s.includes('screenshot.') ||
+      s.includes('voucher.') ||
+      s.includes('znet.tr') ||
+      ['cloudinary.com', 'imgur.com', 'postimg', 'imgbb', 'ibb.co', 'prnt.sc', 'discordapp', 'googleusercontent'].some((p) => s.includes(p))
+    ) return true;
+    if (
+      s.includes('/img.php') ||
+      s.includes('/image.php') ||
+      s.includes('/view.php') ||
+      s.includes('/show.php') ||
+      s.includes('/getimage') ||
+      s.includes('/showimage') ||
+      s.includes('/barcode') ||
+      s.includes('/qrcode')
+    ) return true;
     return /\.(png|jpg|jpeg|webp|gif|bmp|svg|tiff)(\?.*)?$/i.test(s);
   };
 
