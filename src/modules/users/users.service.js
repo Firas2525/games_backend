@@ -12,12 +12,13 @@ export const getAllUsers = async (query = {}) => {
   const filter = {};
   if (query.role) filter.role = query.role;
   if (query.search) {
-    const s = query.search.trim();
+    const s = query.search.trim().replace(/^#/, '');
     filter.$or = [
       { name: { $regex: s, $options: 'i' } },
       { email: { $regex: s, $options: 'i' } },
       { phone: { $regex: s, $options: 'i' } },
       { userCode: { $regex: s, $options: 'i' } },
+      ...(mongoose.isValidObjectId(s) ? [{ _id: s }] : []),
     ];
   }
   return await User.find(filter).sort({ createdAt: -1 });
