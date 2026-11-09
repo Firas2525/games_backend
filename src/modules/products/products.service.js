@@ -531,10 +531,17 @@ export const resolveProductProfitPercentage = (
     if (product.source === 'custom') {
       const cost = Number(product.originalPrice ?? 0);
       const selling = Number(product.sellingPrice ?? product.price ?? cost);
-      if (cost > 0 && selling >= cost) {
+      if (cost > 0 && selling > cost) {
         nominalProfit = Number((((selling - cost) / cost) * 100).toFixed(2));
       } else {
-        nominalProfit = 0;
+        const subId = product.subCategoryId ? product.subCategoryId.toString() : null;
+        if (subId && subCatMap[subId] !== undefined) {
+          nominalProfit = subCatMap[subId];
+        } else if (product.mainCategory && catMap[product.mainCategory] !== undefined) {
+          nominalProfit = catMap[product.mainCategory];
+        } else {
+          nominalProfit = globalProfit || 0;
+        }
       }
     } else {
       const subId = product.subCategoryId ? product.subCategoryId.toString() : null;
@@ -1514,15 +1521,34 @@ export const getSubCategories = async (
 
     const isCustom = p.source === 'custom';
     const effectiveProfit = resolveProductProfitPercentage(p, globalProfitPercentage, catMap, subCatMap, userCustomProfit);
-    const baseCost = p.originalPrice && p.originalPrice > 0 ? p.originalPrice : (p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price || 0));
-    let finalUnitPrice = isCustom
-      ? calcSmartPrice(p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price || baseCost))
-      : (effectiveProfit > 0 ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100)) : baseCost);
+    const regularSellingPrice = Number(p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price || 0));
+    let baseCost = Number(p.originalPrice || 0);
+    if (baseCost <= 0) {
+      if (effectiveProfit > 0 && regularSellingPrice > 0) {
+        baseCost = Number((regularSellingPrice / (1 + effectiveProfit / 100)).toFixed(4));
+      } else {
+        baseCost = regularSellingPrice;
+      }
+    }
 
-    const floorPrice = isCustom ? baseCost : calcSmartPrice(baseCost * 1.004);
+    const hasCustomUserProfit = (userCustomProfit !== null && userCustomProfit !== undefined && !isNaN(userCustomProfit));
+    let priceBeforeDiscount;
+    if (isCustom) {
+      if (hasCustomUserProfit && baseCost > 0) {
+        const customCalculated = calcSmartPrice(baseCost * (1 + effectiveProfit / 100));
+        priceBeforeDiscount = Math.min(regularSellingPrice, customCalculated);
+      } else {
+        priceBeforeDiscount = regularSellingPrice;
+      }
+    } else {
+      priceBeforeDiscount = effectiveProfit > 0 ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100)) : baseCost;
+    }
+
+    const floorPrice = calcSmartPrice(baseCost * 1.004);
     const discountPercent = p.discountPercent || 0;
+    let finalUnitPrice = priceBeforeDiscount;
     if (discountPercent > 0) {
-      const discounted = calcSmartPrice(finalUnitPrice * (1 - discountPercent / 100));
+      const discounted = calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100));
       finalUnitPrice = Math.max(discounted, floorPrice);
     }
     p.price = finalUnitPrice;
@@ -2027,22 +2053,33 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
   const mappedProducts = products.map((doc) => {
     const isCustom = doc.source === 'custom';
     const effectiveProfit = resolveProductProfitPercentage(doc, globalProfitPercentage, catMap, subCatMap, userCustomProfit);
-    const baseCost =
-      doc.originalPrice && doc.originalPrice > 0
-        ? doc.originalPrice
-        : doc.sellingPrice !== null && doc.sellingPrice !== undefined && doc.sellingPrice > 0
-          ? doc.sellingPrice
-          : doc.price && doc.price > 0
-            ? doc.price
-            : 0;
-    const priceBeforeDiscount = isCustom
-      ? calcSmartPrice(doc.sellingPrice && doc.sellingPrice > 0 ? doc.sellingPrice : (doc.price || baseCost))
-      : (effectiveProfit > 0
+    const regularSellingPrice = Number(doc.sellingPrice && doc.sellingPrice > 0 ? doc.sellingPrice : (doc.price || 0));
+    let baseCost = Number(doc.originalPrice || 0);
+    if (baseCost <= 0) {
+      if (effectiveProfit > 0 && regularSellingPrice > 0) {
+        baseCost = Number((regularSellingPrice / (1 + effectiveProfit / 100)).toFixed(4));
+      } else {
+        baseCost = regularSellingPrice;
+      }
+    }
+
+    const hasCustomUserProfit = (userCustomProfit !== null && userCustomProfit !== undefined && !isNaN(userCustomProfit));
+    let priceBeforeDiscount;
+    if (isCustom) {
+      if (hasCustomUserProfit && baseCost > 0) {
+        const customCalculated = calcSmartPrice(baseCost * (1 + effectiveProfit / 100));
+        priceBeforeDiscount = Math.min(regularSellingPrice, customCalculated);
+      } else {
+        priceBeforeDiscount = regularSellingPrice;
+      }
+    } else {
+      priceBeforeDiscount = effectiveProfit > 0
         ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
-        : baseCost);
+        : baseCost;
+    }
 
     // Stop-loss: Admin profit margin must never drop below 0.4% in the worst case
-    const floorPrice = isCustom ? baseCost : calcSmartPrice(baseCost * 1.004);
+    const floorPrice = calcSmartPrice(baseCost * 1.004);
     const discountPercent = doc.discountPercent || 0;
     let finalPrice = priceBeforeDiscount;
     let effectiveDiscountPercent = discountPercent;
@@ -2433,26 +2470,48 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
     }
   }
 
-  // 3. Fallback for stored products
+  // 3. Fallback for stored products (custom products)
   const isCustom = product.source === 'custom';
-  const fallbackBaseCost =
-    product.originalPrice && product.originalPrice > 0
-      ? product.originalPrice
-      : product.sellingPrice && product.sellingPrice > 0
-        ? product.sellingPrice
-        : product.price || 0;
+  const regularSellingPrice = Number(product.sellingPrice && product.sellingPrice > 0 ? product.sellingPrice : (product.price || 0));
+  let fallbackBaseCost = Number(product.originalPrice || 0);
+  if (fallbackBaseCost <= 0) {
+    if (profitPercentage > 0 && regularSellingPrice > 0) {
+      fallbackBaseCost = Number((regularSellingPrice / (1 + profitPercentage / 100)).toFixed(4));
+    } else {
+      fallbackBaseCost = regularSellingPrice;
+    }
+  }
 
-  const fallbackPriceBeforeDiscount = isCustom
-    ? calcSmartPrice(product.sellingPrice && product.sellingPrice > 0 ? product.sellingPrice : (product.price || fallbackBaseCost))
-    : (profitPercentage > 0
+  const hasCustomUserProfit = (userCustomProfit !== null && userCustomProfit !== undefined && !isNaN(userCustomProfit));
+  let fallbackPriceBeforeDiscount;
+  if (isCustom) {
+    if (hasCustomUserProfit && fallbackBaseCost > 0) {
+      const customCalculated = calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100));
+      fallbackPriceBeforeDiscount = Math.min(regularSellingPrice, customCalculated);
+    } else {
+      fallbackPriceBeforeDiscount = regularSellingPrice;
+    }
+  } else {
+    fallbackPriceBeforeDiscount = profitPercentage > 0
       ? calcSmartPrice(fallbackBaseCost * (1 + profitPercentage / 100))
-      : fallbackBaseCost);
+      : fallbackBaseCost;
+  }
 
   const discountPercent = product.discountPercent || 0;
-  const fallbackUserPrice =
-    discountPercent > 0
-      ? calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100))
-      : fallbackPriceBeforeDiscount;
+  const floorPrice = calcSmartPrice(fallbackBaseCost * 1.004);
+  let fallbackUserPrice = fallbackPriceBeforeDiscount;
+  let effectiveDiscount = discountPercent;
+  if (discountPercent > 0) {
+    const discounted = calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100));
+    if (discounted < floorPrice) {
+      fallbackUserPrice = Math.max(discounted, floorPrice);
+      effectiveDiscount = fallbackPriceBeforeDiscount > floorPrice
+        ? Number((((fallbackPriceBeforeDiscount - fallbackUserPrice) / fallbackPriceBeforeDiscount) * 100).toFixed(2))
+        : 0;
+    } else {
+      fallbackUserPrice = discounted;
+    }
+  }
 
   let resolvedCustomCurrency = (product.currency === 'BOTH' || product.currency === 'ALL' || !product.currency) ? '$' : product.currency;
   let customBaseCost = fallbackBaseCost;
@@ -2464,9 +2523,11 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
     if (isCustom && (product.currency === '$' || product.currency === 'USD' || !product.currency || product.currency === 'BOTH' || product.currency === 'ALL')) {
       customBaseCost = Math.round(fallbackBaseCost * exchangeRate);
       customPriceBefore = Math.round(fallbackPriceBeforeDiscount * exchangeRate);
-      customUserPrice = discountPercent > 0
-        ? Math.round(customPriceBefore * (1 - discountPercent / 100))
+      const sypFloor = Math.round(customBaseCost * 1.004);
+      const sypDiscounted = effectiveDiscount > 0
+        ? Math.round(customPriceBefore * (1 - effectiveDiscount / 100))
         : customPriceBefore;
+      customUserPrice = Math.max(sypDiscounted, sypFloor);
     }
   }
 
