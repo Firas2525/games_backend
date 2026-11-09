@@ -655,9 +655,11 @@ export const getAdminProducts = async (query = {}) => {
         ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100))
         : baseCost);
     const discountPercent = p.discountPercent || 0;
-    const finalPrice = discountPercent > 0
-      ? calcSmartPrice(calculatedPrice * (1 - discountPercent / 100))
-      : calculatedPrice;
+    let finalPrice = calculatedPrice;
+    if (discountPercent > 0 && baseCost > 0) {
+      const netProfit = Math.max(0, effectiveProfit - discountPercent);
+      finalPrice = calcSmartPrice(baseCost * (1 + netProfit / 100));
+    }
     return {
       ...p,
       currency: (p.currency === 'BOTH' || p.currency === 'ALL' || !p.currency) ? '$' : p.currency,
@@ -1544,12 +1546,14 @@ export const getSubCategories = async (
       priceBeforeDiscount = effectiveProfit > 0 ? calcSmartPrice(baseCost * (1 + effectiveProfit / 100)) : baseCost;
     }
 
-    const floorPrice = calcSmartPrice(baseCost * 1.004);
+    const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+    const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
     const discountPercent = p.discountPercent || 0;
     let finalUnitPrice = priceBeforeDiscount;
-    if (discountPercent > 0) {
-      const discounted = calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100));
-      finalUnitPrice = Math.max(discounted, floorPrice);
+    if (discountPercent > 0 && baseCost > 0) {
+      const netProfit = Math.max(minProfitFloor, effectiveProfit - discountPercent);
+      const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
+      finalUnitPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
     }
     p.price = finalUnitPrice;
 
@@ -2078,22 +2082,20 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
         : baseCost;
     }
 
-    // Stop-loss: Admin profit margin must never drop below 0.4% in the worst case
-    const floorPrice = calcSmartPrice(baseCost * 1.004);
+    // Stop-loss: For custom-profit users, min profit floor is 0.4%, for regular users min profit floor is 0%
+    const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+    const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
     const discountPercent = doc.discountPercent || 0;
     let finalPrice = priceBeforeDiscount;
     let effectiveDiscountPercent = discountPercent;
 
-    if (discountPercent > 0) {
-      const discounted = calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100));
-      if (discounted < floorPrice) {
-        finalPrice = Math.max(discounted, floorPrice);
-        effectiveDiscountPercent = priceBeforeDiscount > floorPrice
-          ? Number((((priceBeforeDiscount - finalPrice) / priceBeforeDiscount) * 100).toFixed(2))
-          : 0;
-      } else {
-        finalPrice = discounted;
-      }
+    if (discountPercent > 0 && baseCost > 0) {
+      const netProfit = Math.max(minProfitFloor, effectiveProfit - discountPercent);
+      const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
+      finalPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
+      effectiveDiscountPercent = priceBeforeDiscount > finalPrice
+        ? Number((((priceBeforeDiscount - finalPrice) / priceBeforeDiscount) * 100).toFixed(2))
+        : 0;
     }
 
     let finalCurrency = (doc.currency === 'BOTH' || doc.currency === 'ALL' || !doc.currency) ? '$' : doc.currency;
@@ -2106,7 +2108,7 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
       if (isCustom && (doc.currency === '$' || doc.currency === 'USD' || !doc.currency || doc.currency === 'BOTH' || doc.currency === 'ALL')) {
         convertedCost = Math.round(baseCost * exchangeRate);
         convertedPriceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
-        const sypFloor = Math.round(convertedCost * 1.004);
+        const sypFloor = Math.round(convertedCost * (1 + minProfitFloor / 100));
         const sypDiscounted = effectiveDiscountPercent > 0
           ? Math.round(convertedPriceBeforeDiscount * (1 - effectiveDiscountPercent / 100))
           : convertedPriceBeforeDiscount;
@@ -2498,19 +2500,17 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
   }
 
   const discountPercent = product.discountPercent || 0;
-  const floorPrice = calcSmartPrice(fallbackBaseCost * 1.004);
+  const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+  const floorPrice = calcSmartPrice(fallbackBaseCost * (1 + minProfitFloor / 100));
   let fallbackUserPrice = fallbackPriceBeforeDiscount;
   let effectiveDiscount = discountPercent;
-  if (discountPercent > 0) {
-    const discounted = calcSmartPrice(fallbackPriceBeforeDiscount * (1 - discountPercent / 100));
-    if (discounted < floorPrice) {
-      fallbackUserPrice = Math.max(discounted, floorPrice);
-      effectiveDiscount = fallbackPriceBeforeDiscount > floorPrice
-        ? Number((((fallbackPriceBeforeDiscount - fallbackUserPrice) / fallbackPriceBeforeDiscount) * 100).toFixed(2))
-        : 0;
-    } else {
-      fallbackUserPrice = discounted;
-    }
+  if (discountPercent > 0 && fallbackBaseCost > 0) {
+    const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
+    const discounted = calcSmartPrice(fallbackBaseCost * (1 + netProfit / 100));
+    fallbackUserPrice = Math.min(fallbackPriceBeforeDiscount, Math.max(discounted, floorPrice));
+    effectiveDiscount = fallbackPriceBeforeDiscount > fallbackUserPrice
+      ? Number((((fallbackPriceBeforeDiscount - fallbackUserPrice) / fallbackPriceBeforeDiscount) * 100).toFixed(2))
+      : 0;
   }
 
   let resolvedCustomCurrency = (product.currency === 'BOTH' || product.currency === 'ALL' || !product.currency) ? '$' : product.currency;
@@ -2523,7 +2523,7 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
     if (isCustom && (product.currency === '$' || product.currency === 'USD' || !product.currency || product.currency === 'BOTH' || product.currency === 'ALL')) {
       customBaseCost = Math.round(fallbackBaseCost * exchangeRate);
       customPriceBefore = Math.round(fallbackPriceBeforeDiscount * exchangeRate);
-      const sypFloor = Math.round(customBaseCost * 1.004);
+      const sypFloor = Math.round(customBaseCost * (1 + minProfitFloor / 100));
       const sypDiscounted = effectiveDiscount > 0
         ? Math.round(customPriceBefore * (1 - effectiveDiscount / 100))
         : customPriceBefore;

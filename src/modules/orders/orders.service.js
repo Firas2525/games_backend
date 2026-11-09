@@ -305,13 +305,20 @@ export const executePurchase = async ({
     priceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
   }
 
-  const calculatedSellingPrice =
-    discountPercent > 0
-      ? (priceBeforeDiscount >= 1 ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4)) : Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(8)))
-      : priceBeforeDiscount;
+  const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+  let calculatedSellingPrice = priceBeforeDiscount;
+  if (discountPercent > 0 && exchangeAdjustedCost > 0) {
+    const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
+    const discounted = (exchangeAdjustedCost >= 1
+      ? Number((exchangeAdjustedCost * (1 + netProfit / 100)).toFixed(4))
+      : Number((exchangeAdjustedCost * (1 + netProfit / 100)).toFixed(8)));
+    calculatedSellingPrice = Math.min(priceBeforeDiscount, discounted);
+  }
 
-  // STOP-LOSS FLOOR PRICE: 0.4% minimum profit guaranteed to admin in all circumstances
-  const floorPrice = (exchangeAdjustedCost >= 1 ? Number((exchangeAdjustedCost * 1.004).toFixed(4)) : Number((exchangeAdjustedCost * 1.004).toFixed(8)));
+  // STOP-LOSS FLOOR PRICE: minimum profit guaranteed to admin in all circumstances
+  const floorPrice = minProfitFloor > 0
+    ? (exchangeAdjustedCost >= 1 ? Number((exchangeAdjustedCost * (1 + minProfitFloor / 100)).toFixed(4)) : Number((exchangeAdjustedCost * (1 + minProfitFloor / 100)).toFixed(8)))
+    : exchangeAdjustedCost;
 
   const finalSellingPrice = Math.max(calculatedSellingPrice, floorPrice);
 
