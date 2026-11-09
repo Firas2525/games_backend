@@ -2316,21 +2316,20 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
           ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
           : baseCost;
 
+      const hasCustomUserProfit = (userCustomProfit !== null && userCustomProfit !== undefined && !isNaN(userCustomProfit));
+      const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+      const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
       const discountPercent = pkg.discountPercent || product.discountPercent || 0;
-      const floorPrice = (pkg.source === 'custom' || product.source === 'custom') ? baseCost : calcSmartPrice(baseCost * 1.004);
       let userPrice = priceBeforeDiscount;
       let effectiveDiscount = discountPercent;
 
-      if (discountPercent > 0) {
-        const discounted = calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100));
-        if (discounted < floorPrice) {
-          userPrice = Math.max(discounted, floorPrice);
-          effectiveDiscount = priceBeforeDiscount > floorPrice
-            ? Number((((priceBeforeDiscount - userPrice) / priceBeforeDiscount) * 100).toFixed(2))
-            : 0;
-        } else {
-          userPrice = discounted;
-        }
+      if (discountPercent > 0 && baseCost > 0) {
+        const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
+        const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
+        userPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
+        effectiveDiscount = priceBeforeDiscount > userPrice
+          ? Number((((priceBeforeDiscount - userPrice) / priceBeforeDiscount) * 100).toFixed(2))
+          : 0;
       }
 
       return {
@@ -2431,11 +2430,20 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
               ? calcSmartPrice(baseCost * (1 + profitPercentage / 100))
               : baseCost;
 
+          const hasCustomUserProfit = (userCustomProfit !== null && userCustomProfit !== undefined && !isNaN(userCustomProfit));
+          const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
+          const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
           const discountPercent = product.discountPercent || 0;
-          const userPrice =
-            discountPercent > 0
-              ? calcSmartPrice(priceBeforeDiscount * (1 - discountPercent / 100))
-              : priceBeforeDiscount;
+          let userPrice = priceBeforeDiscount;
+          let effectiveDiscount = discountPercent;
+          if (discountPercent > 0 && baseCost > 0) {
+            const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
+            const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
+            userPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
+            effectiveDiscount = priceBeforeDiscount > userPrice
+              ? Number((((priceBeforeDiscount - userPrice) / priceBeforeDiscount) * 100).toFixed(2))
+              : 0;
+          }
 
           return {
             id: pkg.id?.toString() || product.externalId,
@@ -2444,8 +2452,8 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
             fullName: pkg.name || product.name,
             description: pkg.description || product.category,
             price: userPrice,
-            priceBeforeDiscount: discountPercent > 0 ? priceBeforeDiscount : null,
-            discountPercent,
+            priceBeforeDiscount: effectiveDiscount > 0 ? priceBeforeDiscount : null,
+            discountPercent: effectiveDiscount,
             costPrice: baseCost,
             originalPrice: product.originalPrice || baseCost,
             currency: isUserSyp ? '\u0644.\u0633' : '$',
