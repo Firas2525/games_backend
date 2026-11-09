@@ -67,6 +67,13 @@ const extractUserCurrency = (req) => {
   );
 };
 
+const extractUserCustomProfit = (req) => {
+  if (req.user?.customProfitPercentage !== undefined && req.user?.customProfitPercentage !== null) {
+    return Number(req.user.customProfitPercentage);
+  }
+  return null;
+};
+
 export const getCategories = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
   const isAdmin = req.user?.role === 'admin' || req.query.admin === 'true';
@@ -98,12 +105,14 @@ export const bulkUpdateCategory = asyncHandler(async (req, res) => {
 // Sub-Category handlers
 export const getSubCategoriesList = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
+  const userCustomProfit = extractUserCustomProfit(req);
   const isAdmin = req.user?.role === 'admin' || req.query.admin === 'true';
   const result = await productsService.getSubCategories(
     req.query.mainCategory,
     userCurrency,
     req.query.parentId,
-    isAdmin
+    isAdmin,
+    userCustomProfit
   );
   return ApiResponse.success(res, result, 'Subcategories fetched successfully');
 });
@@ -140,13 +149,15 @@ export const materializeSubCategories = asyncHandler(async (req, res) => {
 
 export const getUserList = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
-  const result = await productsService.getUserProducts(req.query, userCurrency);
+  const userCustomProfit = extractUserCustomProfit(req);
+  const result = await productsService.getUserProducts(req.query, userCurrency, userCustomProfit);
   return ApiResponse.success(res, result, 'User products fetched successfully');
 });
 
 export const getDetails = asyncHandler(async (req, res) => {
   const userCurrency = extractUserCurrency(req);
-  const result = await productsService.getProductDetails(req.params.id, userCurrency);
+  const userCustomProfit = extractUserCustomProfit(req);
+  const result = await productsService.getProductDetails(req.params.id, userCurrency, userCustomProfit);
   return ApiResponse.success(res, result, 'Product details fetched successfully');
 });
 

@@ -465,5 +465,28 @@ export const redeemCoins = async (userId, requestedCoins) => {
   };
 };
 
+export const updateUserCustomProfit = async (userId, customProfitPercentage) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError('المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+  let profitVal = null;
+  if (
+    customProfitPercentage !== null &&
+    customProfitPercentage !== undefined &&
+    customProfitPercentage !== ''
+  ) {
+    const parsed = Number(customProfitPercentage);
+    if (isNaN(parsed) || parsed < 0) {
+      throw new ApiError('نسبة الربح غير صالحة، يجب أن تكون رقماً موجباً', HTTP_STATUS.BAD_REQUEST);
+    }
+    profitVal = Number(parsed.toFixed(2));
+  }
+  user.customProfitPercentage = profitVal;
+  await user.save();
+  return user.toJSON();
+};
+
+
 
 

@@ -15,6 +15,7 @@ import {
   getCoinsInfoHandler,
   redeemCoinsHandler,
   updateMyProfile,
+  updateCustomProfit,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -47,6 +48,7 @@ router.get('/:id', getUser);
 router.patch('/:id/toggle-status', toggleStatus);
 router.patch('/:id/password', changePassword);
 router.patch('/:id/level', updateLevel);
+router.patch('/:id/custom-profit', updateCustomProfit);
 
 // Balance management routes
 router.post('/:id/balance/deposit', validate(balanceOperationSchema), deposit);

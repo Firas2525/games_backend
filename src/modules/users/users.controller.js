@@ -125,5 +125,12 @@ export const updateMyProfile = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, updatedUser, 'تم تحديث بيانات الحساب بنجاح ✅');
 });
 
+export const updateCustomProfit = asyncHandler(async (req, res) => {
+  const { customProfitPercentage } = req.body;
+  const user = await usersService.updateUserCustomProfit(req.params.id, customProfitPercentage);
+  return ApiResponse.success(res, user, 'تم تحديث نسبة الربح المخصصة للمستخدم بنجاح ✅');
+});
+
+
 
 

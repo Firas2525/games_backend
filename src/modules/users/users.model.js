@@ -77,6 +77,11 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    customProfitPercentage: {
+      type: Number,
+      default: null,
+      min: [0, 'Custom profit percentage cannot be negative'],
+    },
     userCode: {
       type: String,
       unique: true,

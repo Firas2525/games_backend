@@ -200,29 +200,51 @@ export const executePurchase = async ({
   // 2. Resolve true base cost and selling price
   const isCustom = source === 'custom' || product?.source === 'custom' || activeItem?.source === 'custom';
   const settings = await getSettings();
-  let profitPercentage = settings.profitPercentage || 0;
+  const globalProfitPercentage = settings.profitPercentage || 0;
+  let nominalProfitPercentage = globalProfitPercentage;
+
   if (isCustom) {
     const cost = Number(activeItem?.originalPrice ?? product?.originalPrice ?? 0);
     const selling = Number(activeItem?.sellingPrice ?? activeItem?.price ?? product?.sellingPrice ?? product?.price ?? cost);
     if (cost > 0 && selling >= cost) {
-      profitPercentage = Number((((selling - cost) / cost) * 100).toFixed(2));
+      nominalProfitPercentage = Number((((selling - cost) / cost) * 100).toFixed(2));
     } else {
-      profitPercentage = 0;
+      nominalProfitPercentage = 0;
     }
   } else if (product) {
     if (product.subCategoryId) {
       const subCat = await SubCategory.findById(product.subCategoryId).select('profitPercentage').lean();
       if (subCat && subCat.profitPercentage !== null && subCat.profitPercentage !== undefined && !isNaN(subCat.profitPercentage)) {
-        profitPercentage = Number(subCat.profitPercentage);
+        nominalProfitPercentage = Number(subCat.profitPercentage);
       }
     }
-    if (profitPercentage === (settings.profitPercentage || 0) && product.mainCategory) {
+    if (nominalProfitPercentage === globalProfitPercentage && product.mainCategory) {
       const cat = await Category.findOne({ key: product.mainCategory }).select('profitPercentage').lean();
       if (cat && cat.profitPercentage !== null && cat.profitPercentage !== undefined && !isNaN(cat.profitPercentage)) {
-        profitPercentage = Number(cat.profitPercentage);
+        nominalProfitPercentage = Number(cat.profitPercentage);
       }
     }
   }
+
+  // User Custom Profit Scaling Factor:
+  let profitPercentage = nominalProfitPercentage;
+  const userCustomProfit = (user.customProfitPercentage !== null && user.customProfitPercentage !== undefined && !isNaN(user.customProfitPercentage))
+    ? Number(user.customProfitPercentage)
+    : null;
+
+  if (userCustomProfit !== null) {
+    if (globalProfitPercentage > 0) {
+      const userRatio = userCustomProfit / globalProfitPercentage;
+      profitPercentage = Number((nominalProfitPercentage * userRatio).toFixed(2));
+    } else {
+      profitPercentage = userCustomProfit;
+    }
+    // Safety floor: profit margin must never drop below 0.4%
+    if (profitPercentage < 0.4) {
+      profitPercentage = 0.4;
+    }
+  }
+
   const discountPercent = activeItem?.discountPercent || product?.discountPercent || 0;
 
   const incomingClientPrice = Number(clientBasePrice || userPrice || price || amount || 0);
@@ -238,7 +260,7 @@ export const executePurchase = async ({
             : (incomingClientPrice > 0 ? incomingClientPrice : 0));
 
   // Expected price with profit (Preserving full 8 decimals for fractional unit prices < 1 to prevent rounding errors)
-  const priceBeforeDiscount = isCustom
+  let priceBeforeDiscount = isCustom
     ? Number(activeItem?.sellingPrice ?? activeItem?.price ?? product?.sellingPrice ?? product?.price ?? baseCost)
     : (profitPercentage > 0
         ? (baseCost >= 1 ? Number((baseCost * (1 + profitPercentage / 100)).toFixed(4)) : Number((baseCost * (1 + profitPercentage / 100)).toFixed(8)))
@@ -246,8 +268,9 @@ export const executePurchase = async ({
 
   // If user is SYP and custom product was created in USD, convert to SYP using exchange rate:
   const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  let exchangeAdjustedCost = baseCost;
   if (isUserSyp && isCustom && !isProductSyp) {
-    baseCost = Math.round(baseCost * exchangeRate);
+    exchangeAdjustedCost = Math.round(baseCost * exchangeRate);
     priceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
   }
 
@@ -256,13 +279,20 @@ export const executePurchase = async ({
       ? (priceBeforeDiscount >= 1 ? Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(4)) : Number((priceBeforeDiscount * (1 - discountPercent / 100)).toFixed(8)))
       : priceBeforeDiscount;
 
+  // STOP-LOSS FLOOR PRICE: 0.4% minimum profit guaranteed to admin in all circumstances
+  const floorPrice = isCustom
+    ? exchangeAdjustedCost
+    : (exchangeAdjustedCost >= 1 ? Number((exchangeAdjustedCost * 1.004).toFixed(4)) : Number((exchangeAdjustedCost * 1.004).toFixed(8)));
+
+  const finalSellingPrice = Math.max(calculatedSellingPrice, floorPrice);
+
   // Unit selling price charged to user:
-  const resolvedUnitSellingPrice = calculatedSellingPrice > 0
-    ? calculatedSellingPrice
-    : (incomingClientPrice > 0 ? incomingClientPrice : baseCost);
+  const resolvedUnitSellingPrice = finalSellingPrice > 0
+    ? finalSellingPrice
+    : (incomingClientPrice > 0 ? incomingClientPrice : exchangeAdjustedCost);
 
   // Unit cost from provider
-  let unitCost = baseCost;
+  let unitCost = exchangeAdjustedCost;
   if (!isCustom && unitCost <= 0 && resolvedUnitSellingPrice > 0) {
     unitCost =
       profitPercentage > 0
@@ -321,6 +351,9 @@ export const executePurchase = async ({
   const totalUserPrice = Number((resolvedUnitSellingPrice * validQuantity).toFixed(4));
   const totalCost = Number((unitCost * validQuantity).toFixed(4));
   const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));
+  const actualProfitPercentage = totalCost > 0
+    ? Number((((totalUserPrice - totalCost) / totalCost) * 100).toFixed(2))
+    : profitPercentage;
 
   // 3. Verify user balance
   const currentBalance = user.balance || 0;
@@ -417,7 +450,7 @@ export const executePurchase = async ({
       costPrice: totalCost,
       userPrice: totalUserPrice,
       profit: 0,
-      profitPercentage,
+      profitPercentage: actualProfitPercentage,
       discountPercent,
       currency: effectiveCurrency,
       status: 'failed',
@@ -455,7 +488,7 @@ export const executePurchase = async ({
     costPrice: totalCost,
     userPrice: totalUserPrice,
     profit,
-    profitPercentage,
+    profitPercentage: actualProfitPercentage,
     discountPercent,
     currency: effectiveCurrency,
     status: initialStatus,
