@@ -581,36 +581,12 @@ export const getAdminProducts = async (query = {}) => {
       });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
       const objId = new mongoose.Types.ObjectId(query.subCategoryId);
-      let subCatDoc = null;
-      try {
-        subCatDoc = await SubCategory.findById(objId).select('name').lean();
-      } catch (_) {}
-
-      const matchConditions = [
-        { subCategoryId: objId },
-        { subCategoryId: String(query.subCategoryId) },
-      ];
-
-      if (subCatDoc && subCatDoc.name) {
-        matchConditions.push({
-          $and: [
-            {
-              $or: [
-                { subCategoryId: null },
-                { subCategoryId: { $exists: false } },
-              ],
-            },
-            {
-              $or: [
-                { subCategoryName: subCatDoc.name.trim() },
-                { category: subCatDoc.name.trim() },
-              ],
-            },
-          ],
-        });
-      }
-
-      andClauses.push({ $or: matchConditions });
+      andClauses.push({
+        $or: [
+          { subCategoryId: objId },
+          { subCategoryId: String(query.subCategoryId) },
+        ],
+      });
     } else {
       andClauses.push({ subCategoryId: query.subCategoryId });
     }
@@ -850,6 +826,7 @@ export const ensureDefaultCategories = async () => {
 let isAutoRepairDone = false;
 export const ensureSubcategoryProductsVisible = async () => {
   if (isAutoRepairDone) return;
+  isAutoRepairDone = true;
   try {
     // Automatically repair and enable all products organized into subcategories by Admin
     const result = await Product.updateMany(
@@ -874,35 +851,6 @@ export const ensureSubcategoryProductsVisible = async () => {
       console.log(`[Auto-Repair] Successfully enabled ${result.modifiedCount} products organized in subcategories by Admin.`);
       serverCache.clearAll();
     }
-
-    // Synchronize subCategoryName and category for products that have an explicit subCategoryId
-    const allSubs = await SubCategory.find({}).select('_id name imageUrl').lean();
-    if (allSubs.length > 0) {
-      const bulkSyncOps = allSubs.map((sub) => ({
-        updateMany: {
-          filter: {
-            $or: [
-              { subCategoryId: sub._id },
-              { subCategoryId: sub._id.toString() },
-            ],
-            $or: [
-              { subCategoryName: { $ne: sub.name } },
-              { category: { $ne: sub.name } },
-            ],
-          },
-          update: {
-            $set: {
-              subCategoryName: sub.name,
-              category: sub.name,
-              subCategoryImage: sub.imageUrl || '',
-            },
-          },
-        },
-      }));
-      await Product.bulkWrite(bulkSyncOps, { ordered: false });
-    }
-
-    isAutoRepairDone = true;
   } catch (err) {
     console.error('ensureSubcategoryProductsVisible error:', err.message);
   }
@@ -1485,31 +1433,10 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
     }
   }
 
-  // 3. Match Products
-  const subNames = subCategories.map((s) => s.name?.trim()).filter(Boolean);
-  const matchClauses = [
+  // 3. Match Products strictly by subCategoryId (fast indexed lookup)
+  const andList = [
     { subCategoryId: { $in: allSubCatIds } },
   ];
-  if (subNames.length > 0) {
-    matchClauses.push({
-      $and: [
-        {
-          $or: [
-            { subCategoryId: null },
-            { subCategoryId: { $exists: false } },
-          ],
-        },
-        {
-          $or: [
-            { subCategoryName: { $in: subNames } },
-            { category: { $in: subNames } },
-          ],
-        },
-      ],
-    });
-  }
-
-  const andList = [{ $or: matchClauses }];
 
   // For regular users, only count visible, available, and currency-matching products
   if (!isAdmin) {
@@ -1543,17 +1470,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       }
       p.currency = 'ل.س';
     }
-    let sId = null;
-    const directSubId = p.subCategoryId?.toString();
-    if (directSubId) {
-      sId = directSubId;
-    } else {
-      if (p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
-        sId = subCategoryNameMap[p.subCategoryName.trim().toLowerCase()];
-      } else if (p.category && subCategoryNameMap[p.category.trim().toLowerCase()]) {
-        sId = subCategoryNameMap[p.category.trim().toLowerCase()];
-      }
-    }
+    const sId = p.subCategoryId?.toString();
     if (sId) {
       if (!productsBySubId[sId]) productsBySubId[sId] = [];
       productsBySubId[sId].push(p);
@@ -1961,37 +1878,15 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
       }
 
       if (targetSubCat) {
-        const childSubs = await SubCategory.find({ parentId: targetSubCat._id }).select('_id name').lean();
+        const childSubs = await SubCategory.find({ parentId: targetSubCat._id }).select('_id').lean();
         const allIds = [
           targetSubCat._id,
           targetSubCat._id.toString(),
           ...childSubs.map((c) => c._id),
           ...childSubs.map((c) => c._id.toString()),
         ];
-        const allNames = [
-          targetSubCat.name.trim(),
-          ...childSubs.map((c) => c.name.trim()),
-        ];
         andClauses.push({
-          $or: [
-            { subCategoryId: { $in: allIds } },
-            {
-              $and: [
-                {
-                  $or: [
-                    { subCategoryId: null },
-                    { subCategoryId: { $exists: false } },
-                  ],
-                },
-                {
-                  $or: [
-                    { subCategoryName: { $in: allNames } },
-                    { category: { $in: allNames } },
-                  ],
-                },
-              ],
-            },
-          ],
+          subCategoryId: { $in: allIds },
         });
       } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
         const objId = new mongoose.Types.ObjectId(query.subCategoryId);
@@ -2002,27 +1897,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
           ],
         });
       } else {
-        andClauses.push({
-          $or: [
-            { subCategoryId: query.subCategoryId },
-            {
-              $and: [
-                {
-                  $or: [
-                    { subCategoryId: null },
-                    { subCategoryId: { $exists: false } },
-                  ],
-                },
-                {
-                  $or: [
-                    { subCategoryName: query.subCategoryId },
-                    { category: query.subCategoryId },
-                  ],
-                },
-              ],
-            },
-          ],
-        });
+        andClauses.push({ subCategoryId: query.subCategoryId });
       }
     }
   }
