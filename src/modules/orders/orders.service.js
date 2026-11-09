@@ -142,6 +142,35 @@ export const executePurchase = async ({
   // The authoritative provider source
   source = product?.source || packageProduct?.source || activeItem?.source || 'custom';
 
+  // 1.05 Anti-duplicate order check within 60 seconds (cooldown)
+  const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+  const targetProductId = product?._id || activeItem?._id || (mongoose.isValidObjectId(productId) ? productId : null);
+
+  const duplicateQuery = {
+    userId: user._id,
+    createdAt: { $gte: oneMinuteAgo },
+    status: { $in: ['pending', 'processing', 'completed'] },
+  };
+
+  if (targetProductId) {
+    duplicateQuery.$or = [
+      { productId: targetProductId },
+      ...(finalProductName ? [{ productName: finalProductName }] : []),
+    ];
+  } else if (finalProductName) {
+    duplicateQuery.productName = finalProductName;
+  }
+
+  const recentOrder = await Order.findOne(duplicateQuery).sort({ createdAt: -1 }).lean();
+  if (recentOrder) {
+    const elapsedSeconds = Math.floor((Date.now() - new Date(recentOrder.createdAt).getTime()) / 1000);
+    const remainingSeconds = Math.max(1, 60 - elapsedSeconds);
+    throw new ApiError(
+      `هناك طلب تم إرساله بالفعل لهذا المنتج وهو قيد المعالجة الآن ⏳. يرجى الانتظار (${remainingSeconds} ثانية) قبل إرسال طلب جديد لتفادي التكرار.`,
+      HTTP_STATUS.TOO_MANY_REQUESTS || 429
+    );
+  }
+
   // 1.1 Strict Currency & Source Matching Check (Lira vs Dollar isolation)
   const userCurrency = (user.currency || 'USD').toUpperCase();
   const isUserSyp = userCurrency === 'SYP' || userCurrency === 'ل.س';
