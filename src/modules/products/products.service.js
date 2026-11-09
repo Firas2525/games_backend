@@ -1361,8 +1361,6 @@ export const materializeAllSubCategories = async (targetMainCategory = null) => 
 
 // 6.3 Sub-Categories Management (Groups / Folders within a Main Category - High-Speed Cached)
 export const getSubCategories = async (mainCategory, userCurrency = null, parentId = undefined, isAdmin = false) => {
-  await ensureSubcategoryProductsVisible();
-
   const cacheKey = `subcats_${mainCategory || 'all'}_${parentId || 'root'}_${userCurrency || 'all'}`;
   if (!isAdmin) {
     const cached = serverCache.get(cacheKey);
@@ -1386,28 +1384,35 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   const subCategories = await SubCategory.find(filter).sort({ sortOrder: 1, createdAt: 1 }).lean();
   const allSubCategories = await SubCategory.find({ isVisible: true }).select('_id parentId mainCategory name').lean();
 
-  // 1. Build parent/child relationship map
+  // 1. Build parent/child relationship map safely (prevent self-reference loops)
   const childCountMap = {};
   const childrenMap = {};
   for (const sc of allSubCategories) {
     if (sc.parentId) {
       const pIdStr = sc.parentId.toString();
+      const scIdStr = sc._id.toString();
+      if (pIdStr === scIdStr) continue; // Ignore accidental self-reference
       childCountMap[pIdStr] = (childCountMap[pIdStr] || 0) + 1;
       if (!childrenMap[pIdStr]) childrenMap[pIdStr] = [];
-      childrenMap[pIdStr].push(sc._id.toString());
+      childrenMap[pIdStr].push(scIdStr);
     }
   }
 
-  // Helper to gather all descendant IDs (subtrees)
+  // Helper to gather all descendant IDs (subtrees) safely preventing any infinite cycles
   const getAllDescendantIds = (subIdStr) => {
     const descendants = [];
-    const queue = [subIdStr];
+    const visited = new Set([subIdStr.toString()]);
+    const queue = [subIdStr.toString()];
     while (queue.length > 0) {
       const current = queue.shift();
       const children = childrenMap[current] || [];
       for (const ch of children) {
-        descendants.push(ch);
-        queue.push(ch);
+        const chStr = ch.toString();
+        if (!visited.has(chStr)) {
+          visited.add(chStr);
+          descendants.push(chStr);
+          queue.push(chStr);
+        }
       }
     }
     return descendants;
@@ -1591,16 +1596,22 @@ export const updateSubCategory = async (id, data) => {
   if (imageUrl !== undefined) subCategory.imageUrl = imageUrl.trim();
   if (isVisible !== undefined) subCategory.isVisible = isVisible;
 
-  // Helper to fetch all descendant subcategory IDs recursively (prevents cyclic hierarchy)
+  // Helper to fetch all descendant subcategory IDs recursively (prevents cyclic hierarchy safely)
   const getAllDescendants = async (rootId) => {
     const descendants = [];
+    const rootStr = rootId.toString();
+    const visited = new Set([rootStr]);
     const queue = [rootId];
     while (queue.length > 0) {
       const current = queue.shift();
       const children = await SubCategory.find({ parentId: current }).select('_id').lean();
       for (const child of children) {
-        descendants.push(child._id);
-        queue.push(child._id);
+        const cStr = child._id.toString();
+        if (!visited.has(cStr)) {
+          visited.add(cStr);
+          descendants.push(child._id);
+          queue.push(child._id);
+        }
       }
     }
     return descendants;
