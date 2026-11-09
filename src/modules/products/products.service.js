@@ -1556,6 +1556,9 @@ export const getSubCategories = async (
       finalUnitPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
     }
     p.price = finalUnitPrice;
+    const isDiscountApplied = finalUnitPrice < priceBeforeDiscount;
+    p.priceBeforeDiscount = isDiscountApplied ? priceBeforeDiscount : null;
+    p.discountPercent = isDiscountApplied ? discountPercent : 0;
 
     if (isUserSyp) {
       if (p.source === 'custom' && (p.currency === '$' || p.currency === 'USD' || !p.currency || p.currency === 'BOTH' || p.currency === 'ALL')) {
@@ -2087,16 +2090,14 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
     const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
     const discountPercent = doc.discountPercent || 0;
     let finalPrice = priceBeforeDiscount;
-    let effectiveDiscountPercent = discountPercent;
 
     if (discountPercent > 0 && baseCost > 0) {
       const netProfit = Math.max(minProfitFloor, effectiveProfit - discountPercent);
       const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
       finalPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
-      effectiveDiscountPercent = priceBeforeDiscount > finalPrice
-        ? Number((((priceBeforeDiscount - finalPrice) / priceBeforeDiscount) * 100).toFixed(2))
-        : 0;
     }
+
+    const isDiscountApplied = finalPrice < priceBeforeDiscount;
 
     let finalCurrency = (doc.currency === 'BOTH' || doc.currency === 'ALL' || !doc.currency) ? '$' : doc.currency;
     let convertedCost = baseCost;
@@ -2109,10 +2110,7 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
         convertedCost = Math.round(baseCost * exchangeRate);
         convertedPriceBeforeDiscount = Math.round(priceBeforeDiscount * exchangeRate);
         const sypFloor = Math.round(convertedCost * (1 + minProfitFloor / 100));
-        const sypDiscounted = effectiveDiscountPercent > 0
-          ? Math.round(convertedPriceBeforeDiscount * (1 - effectiveDiscountPercent / 100))
-          : convertedPriceBeforeDiscount;
-        convertedFinalPrice = Math.max(sypDiscounted, sypFloor);
+        convertedFinalPrice = Math.max(Math.round(finalPrice * exchangeRate), sypFloor);
       }
     }
 
@@ -2122,8 +2120,8 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
       currency: finalCurrency,
       costPrice: convertedCost,
       price: convertedFinalPrice,
-      priceBeforeDiscount: effectiveDiscountPercent > 0 ? convertedPriceBeforeDiscount : null,
-      discountPercent: effectiveDiscountPercent,
+      priceBeforeDiscount: isDiscountApplied ? convertedPriceBeforeDiscount : null,
+      discountPercent: isDiscountApplied ? discountPercent : 0,
       profitPercentage: effectiveProfit,
     };
   });
@@ -2321,16 +2319,14 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
       const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
       const discountPercent = pkg.discountPercent || product.discountPercent || 0;
       let userPrice = priceBeforeDiscount;
-      let effectiveDiscount = discountPercent;
 
       if (discountPercent > 0 && baseCost > 0) {
         const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
         const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
         userPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
-        effectiveDiscount = priceBeforeDiscount > userPrice
-          ? Number((((priceBeforeDiscount - userPrice) / priceBeforeDiscount) * 100).toFixed(2))
-          : 0;
       }
+
+      const isDiscountApplied = userPrice < priceBeforeDiscount;
 
       return {
         id: pkg.externalId || pkg._id.toString(),
@@ -2339,8 +2335,8 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
         fullName: pkg.name,
         description: pkg.category,
         price: userPrice,
-        priceBeforeDiscount: effectiveDiscount > 0 ? priceBeforeDiscount : null,
-        discountPercent: effectiveDiscount,
+        priceBeforeDiscount: isDiscountApplied ? priceBeforeDiscount : null,
+        discountPercent: isDiscountApplied ? discountPercent : 0,
         costPrice: baseCost,
         originalPrice: baseCost,
         currency: isUserSyp ? 'ل.س' : (pkg.currency || '$'),
@@ -2435,15 +2431,13 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
           const floorPrice = calcSmartPrice(baseCost * (1 + minProfitFloor / 100));
           const discountPercent = product.discountPercent || 0;
           let userPrice = priceBeforeDiscount;
-          let effectiveDiscount = discountPercent;
           if (discountPercent > 0 && baseCost > 0) {
             const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
             const discounted = calcSmartPrice(baseCost * (1 + netProfit / 100));
             userPrice = Math.min(priceBeforeDiscount, Math.max(discounted, floorPrice));
-            effectiveDiscount = priceBeforeDiscount > userPrice
-              ? Number((((priceBeforeDiscount - userPrice) / priceBeforeDiscount) * 100).toFixed(2))
-              : 0;
           }
+
+          const isDiscountApplied = userPrice < priceBeforeDiscount;
 
           return {
             id: pkg.id?.toString() || product.externalId,
@@ -2452,8 +2446,8 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
             fullName: pkg.name || product.name,
             description: pkg.description || product.category,
             price: userPrice,
-            priceBeforeDiscount: effectiveDiscount > 0 ? priceBeforeDiscount : null,
-            discountPercent: effectiveDiscount,
+            priceBeforeDiscount: isDiscountApplied ? priceBeforeDiscount : null,
+            discountPercent: isDiscountApplied ? discountPercent : 0,
             costPrice: baseCost,
             originalPrice: product.originalPrice || baseCost,
             currency: isUserSyp ? '\u0644.\u0633' : '$',
@@ -2511,15 +2505,13 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
   const minProfitFloor = hasCustomUserProfit ? 0.4 : 0;
   const floorPrice = calcSmartPrice(fallbackBaseCost * (1 + minProfitFloor / 100));
   let fallbackUserPrice = fallbackPriceBeforeDiscount;
-  let effectiveDiscount = discountPercent;
   if (discountPercent > 0 && fallbackBaseCost > 0) {
     const netProfit = Math.max(minProfitFloor, profitPercentage - discountPercent);
     const discounted = calcSmartPrice(fallbackBaseCost * (1 + netProfit / 100));
     fallbackUserPrice = Math.min(fallbackPriceBeforeDiscount, Math.max(discounted, floorPrice));
-    effectiveDiscount = fallbackPriceBeforeDiscount > fallbackUserPrice
-      ? Number((((fallbackPriceBeforeDiscount - fallbackUserPrice) / fallbackPriceBeforeDiscount) * 100).toFixed(2))
-      : 0;
   }
+
+  const isDiscountApplied = fallbackUserPrice < fallbackPriceBeforeDiscount;
 
   let resolvedCustomCurrency = (product.currency === 'BOTH' || product.currency === 'ALL' || !product.currency) ? '$' : product.currency;
   let customBaseCost = fallbackBaseCost;
@@ -2532,10 +2524,7 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
       customBaseCost = Math.round(fallbackBaseCost * exchangeRate);
       customPriceBefore = Math.round(fallbackPriceBeforeDiscount * exchangeRate);
       const sypFloor = Math.round(customBaseCost * (1 + minProfitFloor / 100));
-      const sypDiscounted = effectiveDiscount > 0
-        ? Math.round(customPriceBefore * (1 - effectiveDiscount / 100))
-        : customPriceBefore;
-      customUserPrice = Math.max(sypDiscounted, sypFloor);
+      customUserPrice = Math.max(Math.round(fallbackUserPrice * exchangeRate), sypFloor);
     }
   }
 
@@ -2546,8 +2535,8 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
       ...(product.toObject ? product.toObject() : product),
       currency: resolvedCustomCurrency,
       price: customUserPrice,
-      priceBeforeDiscount: discountPercent > 0 ? customPriceBefore : null,
-      discountPercent,
+      priceBeforeDiscount: isDiscountApplied ? customPriceBefore : null,
+      discountPercent: isDiscountApplied ? discountPercent : 0,
       minCount: fallbackCounts.minCount,
       maxCount: fallbackCounts.maxCount,
       qtyValues: fallbackCounts.qtyValues,
@@ -2561,8 +2550,8 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
         fullName: product.name,
         description: product.category,
         price: customUserPrice,
-        priceBeforeDiscount: discountPercent > 0 ? customPriceBefore : null,
-        discountPercent,
+        priceBeforeDiscount: isDiscountApplied ? customPriceBefore : null,
+        discountPercent: isDiscountApplied ? discountPercent : 0,
         costPrice: customBaseCost,
         originalPrice: customBaseCost,
         currency: resolvedCustomCurrency,
