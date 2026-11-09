@@ -604,7 +604,7 @@ export const getAdminProducts = async (query = {}) => {
 
   const products = await Product.find(filter)
     .select('-rawPayload')
-    .sort({ category: 1, name: 1 })
+    .sort({ price: 1, name: 1 })
     .lean();
 
   const [settings, profitMaps] = await Promise.all([
@@ -637,6 +637,12 @@ export const getAdminProducts = async (query = {}) => {
       discountPercent,
       profitPercentage: effectiveProfit,
     };
+  });
+
+  mappedProducts.sort((a, b) => {
+    const diff = (a.price || 0) - (b.price || 0);
+    if (diff !== 0) return diff;
+    return String(a.name || '').localeCompare(String(b.name || ''));
   });
 
   const categoriesSet = new Set();
@@ -1457,7 +1463,7 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
 
   const products = await Product.find(productMatch).select(
     'id _id name image price sellingPrice originalPrice currency isAvailable isVisible subCategoryId subCategoryName category source'
-  ).lean();
+  ).sort({ price: 1, name: 1 }).lean();
 
   const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('ل.س') || String(userCurrency).includes('ليرة')));
   const settings = await getSettings();
@@ -1485,6 +1491,13 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   let result = subCategories.map((sc) => {
     const sIdStr = sc._id.toString();
     const scProducts = productsBySubId[sIdStr] || [];
+    scProducts.sort((a, b) => {
+      const pA = a.sellingPrice && a.sellingPrice > 0 ? a.sellingPrice : (a.price || a.originalPrice || 0);
+      const pB = b.sellingPrice && b.sellingPrice > 0 ? b.sellingPrice : (b.price || b.originalPrice || 0);
+      const diff = pA - pB;
+      if (diff !== 0) return diff;
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
     const validPrices = scProducts
       .map((p) => (p.sellingPrice && p.sellingPrice > 0 ? p.sellingPrice : (p.price && p.price > 0 ? p.price : (p.originalPrice || 0))))
       .filter((pr) => pr > 0);
@@ -1943,7 +1956,7 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
 
   let productQuery = Product.find(filter)
     .select('-rawPayload')
-    .sort({ sortOrder: 1, category: 1, name: 1 })
+    .sort({ price: 1, name: 1 })
     .lean();
 
   if (query.limit || query.search) {
@@ -2002,6 +2015,12 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
       discountPercent,
       profitPercentage: effectiveProfit,
     };
+  });
+
+  mappedProducts.sort((a, b) => {
+    const diff = (a.price || 0) - (b.price || 0);
+    if (diff !== 0) return diff;
+    return String(a.name || '').localeCompare(String(b.name || ''));
   });
 
   // Only fetch subcategories if explicitly requested AND not filtering by a specific subcategory
