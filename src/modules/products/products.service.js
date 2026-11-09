@@ -581,12 +581,36 @@ export const getAdminProducts = async (query = {}) => {
       });
     } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
       const objId = new mongoose.Types.ObjectId(query.subCategoryId);
-      andClauses.push({
-        $or: [
-          { subCategoryId: objId },
-          { subCategoryId: String(query.subCategoryId) },
-        ],
-      });
+      let subCatDoc = null;
+      try {
+        subCatDoc = await SubCategory.findById(objId).select('name').lean();
+      } catch (_) {}
+
+      const matchConditions = [
+        { subCategoryId: objId },
+        { subCategoryId: String(query.subCategoryId) },
+      ];
+
+      if (subCatDoc && subCatDoc.name) {
+        matchConditions.push({
+          $and: [
+            {
+              $or: [
+                { subCategoryId: null },
+                { subCategoryId: { $exists: false } },
+              ],
+            },
+            {
+              $or: [
+                { subCategoryName: subCatDoc.name.trim() },
+                { category: subCatDoc.name.trim() },
+              ],
+            },
+          ],
+        });
+      }
+
+      andClauses.push({ $or: matchConditions });
     } else {
       andClauses.push({ subCategoryId: query.subCategoryId });
     }
@@ -850,6 +874,34 @@ export const ensureSubcategoryProductsVisible = async () => {
       console.log(`[Auto-Repair] Successfully enabled ${result.modifiedCount} products organized in subcategories by Admin.`);
       serverCache.clearAll();
     }
+
+    // Synchronize subCategoryName and category for products that have an explicit subCategoryId
+    const allSubs = await SubCategory.find({}).select('_id name imageUrl').lean();
+    if (allSubs.length > 0) {
+      const bulkSyncOps = allSubs.map((sub) => ({
+        updateMany: {
+          filter: {
+            $or: [
+              { subCategoryId: sub._id },
+              { subCategoryId: sub._id.toString() },
+            ],
+            $or: [
+              { subCategoryName: { $ne: sub.name } },
+              { category: { $ne: sub.name } },
+            ],
+          },
+          update: {
+            $set: {
+              subCategoryName: sub.name,
+              category: sub.name,
+              subCategoryImage: sub.imageUrl || '',
+            },
+          },
+        },
+      }));
+      await Product.bulkWrite(bulkSyncOps, { ordered: false });
+    }
+
     isAutoRepairDone = true;
   } catch (err) {
     console.error('ensureSubcategoryProductsVisible error:', err.message);
@@ -1440,9 +1492,19 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
   ];
   if (subNames.length > 0) {
     matchClauses.push({
-      $or: [
-        { subCategoryName: { $in: subNames } },
-        { category: { $in: subNames } },
+      $and: [
+        {
+          $or: [
+            { subCategoryId: null },
+            { subCategoryId: { $exists: false } },
+          ],
+        },
+        {
+          $or: [
+            { subCategoryName: { $in: subNames } },
+            { category: { $in: subNames } },
+          ],
+        },
       ],
     });
   }
@@ -1481,12 +1543,16 @@ export const getSubCategories = async (mainCategory, userCurrency = null, parent
       }
       p.currency = 'ل.س';
     }
-    let sId = p.subCategoryId?.toString();
-    if (!sId && p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
-      sId = subCategoryNameMap[p.subCategoryName.trim().toLowerCase()];
-    }
-    if (!sId && p.category && subCategoryNameMap[p.category.trim().toLowerCase()]) {
-      sId = subCategoryNameMap[p.category.trim().toLowerCase()];
+    let sId = null;
+    const directSubId = p.subCategoryId?.toString();
+    if (directSubId) {
+      sId = directSubId;
+    } else {
+      if (p.subCategoryName && subCategoryNameMap[p.subCategoryName.trim().toLowerCase()]) {
+        sId = subCategoryNameMap[p.subCategoryName.trim().toLowerCase()];
+      } else if (p.category && subCategoryNameMap[p.category.trim().toLowerCase()]) {
+        sId = subCategoryNameMap[p.category.trim().toLowerCase()];
+      }
     }
     if (sId) {
       if (!productsBySubId[sId]) productsBySubId[sId] = [];
@@ -1712,7 +1778,12 @@ export const deleteSubCategory = async (id) => {
     throw new ApiError('المجلد / التصنيف الفرعي غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  const productCount = await Product.countDocuments({ subCategoryId: subCategory._id });
+  const productCount = await Product.countDocuments({
+    $or: [
+      { subCategoryId: subCategory._id },
+      { subCategoryId: String(subCategory._id) },
+    ],
+  });
   const childCount = await SubCategory.countDocuments({ parentId: subCategory._id });
 
   if (productCount > 0 || childCount > 0) {
@@ -1724,6 +1795,24 @@ export const deleteSubCategory = async (id) => {
       HTTP_STATUS.BAD_REQUEST
     );
   }
+
+  // Clean up any lingering references to this deleted subcategory
+  await Product.updateMany(
+    {
+      $or: [
+        { subCategoryId: subCategory._id },
+        { subCategoryId: String(subCategory._id) },
+        { subCategoryName: subCategory.name },
+      ],
+    },
+    {
+      $set: {
+        subCategoryId: null,
+        subCategoryName: '',
+        isCategoryOverridden: false,
+      },
+    }
+  );
 
   await subCategory.deleteOne();
   serverCache.clearAll();
@@ -1886,8 +1975,22 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
         andClauses.push({
           $or: [
             { subCategoryId: { $in: allIds } },
-            { subCategoryName: { $in: allNames } },
-            { category: { $in: allNames } },
+            {
+              $and: [
+                {
+                  $or: [
+                    { subCategoryId: null },
+                    { subCategoryId: { $exists: false } },
+                  ],
+                },
+                {
+                  $or: [
+                    { subCategoryName: { $in: allNames } },
+                    { category: { $in: allNames } },
+                  ],
+                },
+              ],
+            },
           ],
         });
       } else if (mongoose.Types.ObjectId.isValid(query.subCategoryId)) {
@@ -1902,8 +2005,22 @@ export const getUserProducts = async (query = {}, userCurrency = null) => {
         andClauses.push({
           $or: [
             { subCategoryId: query.subCategoryId },
-            { subCategoryName: query.subCategoryId },
-            { category: query.subCategoryId },
+            {
+              $and: [
+                {
+                  $or: [
+                    { subCategoryId: null },
+                    { subCategoryId: { $exists: false } },
+                  ],
+                },
+                {
+                  $or: [
+                    { subCategoryName: query.subCategoryId },
+                    { category: query.subCategoryId },
+                  ],
+                },
+              ],
+            },
           ],
         });
       }
