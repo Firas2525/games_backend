@@ -1526,6 +1526,64 @@ export const cancelOrRejectCustomOrder = async (orderId, { reason = '', isReject
 };
 
 /**
+ * Admin: Delete all custom provider orders ("طلبات مزودي الخاص")
+ */
+export const deleteAllCustomOrders = async () => {
+  const customMatch = {
+    $or: [
+      { source: 'custom' },
+      { 'providerPayload.isManual': true },
+      { 'providerPayload.provider': 'مزودي الخاص' },
+      { source: { $in: ['', null] } },
+    ],
+  };
+
+  const result = await Order.deleteMany(customMatch);
+  return {
+    success: true,
+    message: `تم حذف جميع طلبات مزودي الخاص بنجاح (${result.deletedCount || 0} طلب)`,
+    deletedCount: result.deletedCount || 0,
+  };
+};
+
+/**
+ * Admin: Delete a single custom provider order
+ */
+export const deleteSingleCustomOrder = async (orderId) => {
+  const customMatch = {
+    $or: [
+      { source: 'custom' },
+      { 'providerPayload.isManual': true },
+      { 'providerPayload.provider': 'مزودي الخاص' },
+      { source: { $in: ['', null] } },
+    ],
+  };
+
+  const order = await Order.findOne({
+    $and: [
+      {
+        $or: [
+          { orderId: String(orderId) },
+          ...(mongoose.isValidObjectId(orderId) ? [{ _id: orderId }] : []),
+        ],
+      },
+      customMatch,
+    ],
+  });
+
+  if (!order) {
+    throw new ApiError('الطلب غير موجود أو ليس من طلبات مزودي الخاص', HTTP_STATUS.NOT_FOUND);
+  }
+
+  await order.deleteOne();
+  return {
+    success: true,
+    message: 'تم حذف طلب مزودي الخاص بنجاح',
+    orderId,
+  };
+};
+
+/**
  * Handle incoming real-time Webhook notifications from Roya (SW Games)
  */
 export const handleRoyaWebhook = async (data = {}) => {

@@ -2762,13 +2762,22 @@ export const updateCustomProduct = async (id, data) => {
 
 // 15. Delete Custom Product
 export const deleteCustomProduct = async (id) => {
-  const product = await Product.findOne({ _id: id, source: 'custom' });
+  const query = {
+    source: 'custom',
+    $or: [
+      ...(mongoose.isValidObjectId(id) ? [{ _id: id }] : []),
+      { externalId: String(id) },
+    ],
+  };
+
+  const product = await Product.findOne(query);
   if (!product) {
-    throw new ApiError('المنتج الخاص غير موجود', HTTP_STATUS.NOT_FOUND);
+    throw new ApiError('المنتج الخاص غير موجود أو ليس من منتجات مزودي الخاص', HTTP_STATUS.NOT_FOUND);
   }
 
   await product.deleteOne();
-  return { message: 'تم حذف المنتج بنجاح', id };
+  serverCache.clearAll();
+  return { message: 'تم حذف المنتج الخاص بنجاح', id: product._id };
 };
 
 // 16. Update Product Custom Details (Name / Image Override)

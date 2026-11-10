@@ -11,6 +11,8 @@ import {
   completeCustomOrder,
   rejectCustomOrder,
   cancelCustomOrder,
+  deleteAllCustomOrdersHandler,
+  deleteCustomOrderHandler,
   testAdminNotification,
   getFcmDiagnosticsHandler,
   testDirectTokenHandler,
@@ -36,6 +38,8 @@ router.post('/admin/sync-pending', authenticate, authorize(ROLES.ADMIN), syncOrd
 
 // Admin dedicated routes for "مزودي الخاص" (Custom Provider manual processing)
 router.get('/admin/custom-orders', authenticate, authorize(ROLES.ADMIN), getCustomOrders);
+router.delete('/admin/custom-orders/all', authenticate, authorize(ROLES.ADMIN), deleteAllCustomOrdersHandler);
+router.delete('/admin/custom-orders/:orderId', authenticate, authorize(ROLES.ADMIN), deleteCustomOrderHandler);
 router.post('/admin/custom-orders/:orderId/complete', authenticate, authorize(ROLES.ADMIN), completeCustomOrder);
 router.post('/admin/custom-orders/:orderId/reject', authenticate, authorize(ROLES.ADMIN), rejectCustomOrder);
 router.post('/admin/custom-orders/:orderId/cancel', authenticate, authorize(ROLES.ADMIN), cancelCustomOrder);

@@ -74,6 +74,17 @@ export const cancelCustomOrder = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, 'تم إلغاء الطلب واسترجاع المبلغ إلى محفظة المستخدم بنجاح');
 });
 
+export const deleteAllCustomOrdersHandler = asyncHandler(async (req, res) => {
+  const result = await ordersService.deleteAllCustomOrders();
+  return ApiResponse.success(res, result, result.message);
+});
+
+export const deleteCustomOrderHandler = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  const result = await ordersService.deleteSingleCustomOrder(orderId);
+  return ApiResponse.success(res, result, result.message);
+});
+
 export const testAdminNotification = asyncHandler(async (req, res) => {
   const result = await sendAdminNotification({
     title: 'طلب جديد',
