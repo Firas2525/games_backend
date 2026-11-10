@@ -75,13 +75,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadLiveSettings();
 
-  // 5. Download Button Handler
-  const downloadBtn = document.getElementById('downloadApkBtn');
-  if (downloadBtn) {
-    downloadBtn.addEventListener('click', (e) => {
-      // You can place the actual SM-Store.apk file in this folder,
-      // or change downloadBtn.href to a Google Drive or Mediafire direct link.
-    });
+  // 5. Seamless Background Direct Download Handler (No Navigation!)
+  const downloadBtns = document.querySelectorAll('.btn-download-trigger, #downloadApkBtn');
+  const toast = document.getElementById('downloadToast');
+  let toastTimer = null;
+
+  function showToast() {
+    if (!toast) return;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.classList.remove('show');
+    }, 6000);
   }
+
+  downloadBtns.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      showToast();
+
+      // Trigger download via hidden iframe so the parent page NEVER reloads or navigates away!
+      let iframe = document.getElementById('hiddenDownloadFrame');
+      if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'hiddenDownloadFrame';
+        iframe.style.display = 'none';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = 'none';
+        document.body.appendChild(iframe);
+      }
+      iframe.src = '/download';
+    });
+  });
 });
 

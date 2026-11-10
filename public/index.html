@@ -48,7 +48,7 @@
       </nav>
 
       <div class="nav-actions">
-        <a href="#download" class="btn btn-primary btn-sm">
+        <a href="/download" class="btn btn-primary btn-sm btn-download-trigger">
           <i class="fa-solid fa-download"></i>
           <span>تحميل التطبيق</span>
         </a>
@@ -79,7 +79,7 @@
 
         <!-- CTA Buttons -->
         <div class="hero-actions">
-          <a href="#download" class="btn btn-hero btn-download">
+          <a href="/download" class="btn btn-hero btn-download btn-download-trigger">
             <div class="btn-icon">
               <i class="fa-brands fa-android"></i>
             </div>
@@ -317,7 +317,7 @@
 
           <div class="download-buttons">
             <!-- Direct APK Download Button -->
-            <a href="SM-Store.apk" download id="downloadApkBtn" class="btn btn-hero btn-download-lg">
+            <a href="/download" id="downloadApkBtn" class="btn btn-hero btn-download-lg btn-download-trigger">
               <div class="btn-icon">
                 <i class="fa-solid fa-circle-down"></i>
               </div>
@@ -437,6 +437,19 @@
       </div>
     </div>
   </footer>
+
+  <!-- Download Toast Notification -->
+  <div id="downloadToast" class="download-toast">
+    <div class="toast-content">
+      <div class="toast-icon">
+        <i class="fa-solid fa-circle-check text-emerald"></i>
+      </div>
+      <div class="toast-text">
+        <strong>بدأ تنزيل التطبيق الآن...</strong>
+        <span>تفقّد شريط الإشعارات أو التنزيلات في جهازك (SM-Store.apk)</span>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

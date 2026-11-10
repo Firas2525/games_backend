@@ -48,6 +48,58 @@ app.get('/', (req, res) => {
   return res.sendFile(path.join(publicPath, 'index.html'));
 });
 
+// Dynamic Direct APK Download (Resolves MediaFire direct binary URL on the fly)
+let cachedDirectUrl = null;
+let lastResolvedAt = 0;
+let lastSourceUrl = null;
+
+app.get('/download', async (req, res) => {
+  try {
+    let sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file';
+    try {
+      const { Settings } = await import('./modules/settings/settings.model.js');
+      const settings = await Settings.findOne({ key: 'system_settings' }).lean();
+      if (settings?.appDownloadUrl) {
+        sourceUrl = settings.appDownloadUrl.trim();
+      }
+    } catch (_) {}
+
+    // If sourceUrl is already a direct APK link, redirect directly
+    if (sourceUrl.toLowerCase().endsWith('.apk')) {
+      return res.redirect(sourceUrl);
+    }
+
+    const now = Date.now();
+    // Cache the resolved direct link for 20 minutes
+    if (cachedDirectUrl && sourceUrl === lastSourceUrl && now - lastResolvedAt < 20 * 60 * 1000) {
+      return res.redirect(cachedDirectUrl);
+    }
+
+    // Resolve MediaFire direct link
+    if (sourceUrl.includes('mediafire.com')) {
+      const mfResponse = await fetch(sourceUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+      const html = await mfResponse.text();
+      const match = html.match(/href="(https:\/\/download[^"]+)"/i);
+      if (match && match[1]) {
+        cachedDirectUrl = match[1];
+        lastSourceUrl = sourceUrl;
+        lastResolvedAt = now;
+        return res.redirect(cachedDirectUrl);
+      }
+    }
+
+    // Fallback: redirect to sourceUrl
+    return res.redirect(sourceUrl);
+  } catch (err) {
+    return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file');
+  }
+});
+
 app.get('/privacy', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   return res.status(200).send(
