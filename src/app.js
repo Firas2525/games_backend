@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import authRoutes from './modules/auth/auth.routes.js';
 import gamesRoutes from './modules/games/games.routes.js';
@@ -24,24 +26,26 @@ import { syncAllProducts } from './modules/products/products.service.js';
 
 const app = express();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicPath = path.join(__dirname, '../public');
+
 // Security and utility middlewares
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: '*' })); // Allows Flutter Web, Mobile, and Admin to connect
 app.use(morgan('dev'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.static(publicPath));
 
 // Health Check endpoint (ideal for Render zero-downtime health checking)
 app.get('/health', (req, res) => {
   return ApiResponse.success(res, { status: 'healthy', timestamp: new Date() }, 'API is up and running');
 });
 
-// Public Homepage & Privacy Policy for Google OAuth Branding
+// Public Homepage (Landing Page)
 app.get('/', (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.status(200).send(
-    '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>Games Store</title></head><body style="font-family:sans-serif;background:#0f172a;color:#fff;padding:40px;text-align:center;"><h1>Games Store - مركز شحن الألعاب والخدمات الرقمية</h1><p><a href="/privacy" style="color:#38bdf8;">سياسة الخصوصية (Privacy Policy)</a></p></body></html>'
-  );
+  return res.sendFile(path.join(publicPath, 'index.html'));
 });
 
 app.get('/privacy', (req, res) => {
