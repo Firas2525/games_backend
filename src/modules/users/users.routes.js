@@ -16,6 +16,7 @@ import {
   redeemCoinsHandler,
   updateMyProfile,
   updateCustomProfit,
+  purgeAllUsersHandler,
 } from './users.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
@@ -43,6 +44,7 @@ router.put('/me/profile', authenticate, updateMyProfile);
 router.use(authenticate, authorize(ROLES.ADMIN));
 
 router.get('/transactions/all', getAllTransactionsHandler);
+router.post('/purge-all-users', purgeAllUsersHandler);
 router.get('/', getUsers);
 router.get('/:id', getUser);
 router.patch('/:id/toggle-status', toggleStatus);

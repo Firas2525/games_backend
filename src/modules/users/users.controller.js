@@ -131,6 +131,11 @@ export const updateCustomProfit = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, user, 'تم تحديث نسبة الربح المخصصة للمستخدم بنجاح ✅');
 });
 
+export const purgeAllUsersHandler = asyncHandler(async (req, res) => {
+  const result = await usersService.purgeAllUsers(req.user._id, req.body.confirmation);
+  return ApiResponse.success(res, result, result.message);
+});
+
 
 
 

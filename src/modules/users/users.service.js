@@ -3,6 +3,11 @@ import { User } from './users.model.js';
 import { Transaction } from './transactions.model.js';
 import { Deposit } from '../deposits/deposits.model.js';
 import { Order } from '../orders/orders.model.js';
+import { Favorite } from '../favorites/favorites.model.js';
+import { SalaryWithdrawalRequest } from '../salary_withdrawals/salaryWithdrawal.model.js';
+import { VerificationRequest } from '../verification/verification.model.js';
+import { ApiLog } from '../logs/apiLog.model.js';
+import { ROLES } from '../../constants/roles.js';
 import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
@@ -485,6 +490,92 @@ export const updateUserCustomProfit = async (userId, customProfitPercentage) => 
   user.customProfitPercentage = profitVal;
   await user.save();
   return user.toJSON();
+};
+
+export const purgeAllUsers = async (adminUserId, confirmation) => {
+  if (confirmation !== 'CONFIRM_DELETE_ALL_USERS') {
+    throw new ApiError('رمز تأكيد الحذف غير صحيح. يجب تأكيد العملية بالرمز المطلوب.', HTTP_STATUS.BAD_REQUEST);
+  }
+
+  // 1. Fetch all admin accounts to guarantee they are never touched
+  const adminUsers = await User.find({ role: ROLES.ADMIN }).select('_id');
+  const adminIds = adminUsers.map((a) => a._id);
+
+  if (!adminIds || adminIds.length === 0) {
+    throw new ApiError('خطأ أمني: لم يتم العثور على أي حسابات مدراء، تم إلغاء العملية لحماية النظام.', HTTP_STATUS.FORBIDDEN);
+  }
+
+  // Verify the executing user is a verified admin
+  const isRequestingUserAdmin = adminIds.some((id) => id.toString() === adminUserId.toString());
+  if (!isRequestingUserAdmin) {
+    throw new ApiError('غير مصرح لك بإجراء هذه العملية الخطيرة.', HTTP_STATUS.FORBIDDEN);
+  }
+
+  // 2. Fetch all non-admin users only
+  const nonAdminUsers = await User.find({
+    _id: { $nin: adminIds },
+    role: { $ne: ROLES.ADMIN },
+  }).select('_id');
+
+  const userIds = nonAdminUsers.map((u) => u._id);
+
+  if (userIds.length === 0) {
+    return {
+      success: true,
+      message: 'لا يوجد أي مستخدمين عاديين لحذفهم. حسابات المدراء والمنتجات لم تتأثر إطلاقاً.',
+      deletedCounts: {
+        users: 0,
+        transactions: 0,
+        deposits: 0,
+        orders: 0,
+        favorites: 0,
+        salaryWithdrawalRequests: 0,
+        verificationRequests: 0,
+        apiLogs: 0,
+      },
+    };
+  }
+
+  // 3. Delete records belonging to non-admin users
+  // Note: Products, Categories, Subcategories, DepositMethods, SalaryServices, and System Settings are NEVER touched
+  const [
+    transRes,
+    depRes,
+    ordRes,
+    favRes,
+    salRes,
+    verRes,
+    logRes,
+  ] = await Promise.all([
+    Transaction.deleteMany({ userId: { $in: userIds } }),
+    Deposit.deleteMany({ userId: { $in: userIds } }),
+    Order.deleteMany({ userId: { $in: userIds } }),
+    Favorite.deleteMany({ userId: { $in: userIds } }),
+    SalaryWithdrawalRequest.deleteMany({ userId: { $in: userIds } }),
+    VerificationRequest.deleteMany({ userId: { $in: userIds } }),
+    ApiLog.deleteMany({ userId: { $in: userIds } }),
+  ]);
+
+  // 4. Finally delete the non-admin users
+  const userRes = await User.deleteMany({
+    _id: { $in: userIds },
+    role: { $ne: ROLES.ADMIN },
+  });
+
+  return {
+    success: true,
+    message: `تم بنجاح حذف جميع المستخدمين (${userRes.deletedCount || 0}) وجميع عملياتهم وحركاتهم المالية وسجلاتهم. حسابات المدراء وكافة المنتجات وأسعارها وتصنيفاتها محفوظة بالكامل ولم تتأثر.`,
+    deletedCounts: {
+      users: userRes.deletedCount || 0,
+      transactions: transRes.deletedCount || 0,
+      deposits: depRes.deletedCount || 0,
+      orders: ordRes.deletedCount || 0,
+      favorites: favRes.deletedCount || 0,
+      salaryWithdrawalRequests: salRes.deletedCount || 0,
+      verificationRequests: verRes.deletedCount || 0,
+      apiLogs: logRes.deletedCount || 0,
+    },
+  };
 };
 
 
