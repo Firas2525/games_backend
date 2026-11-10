@@ -99,29 +99,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!settings) return;
 
       const whatsapp = (settings.whatsappSupport || '').trim();
-      const telegram = (settings.telegramChannel || '').trim();
 
       // Format WhatsApp link
       if (whatsapp) {
         const cleanNumber = whatsapp.replace(/[^0-9]/g, '');
         const waUrl = `https://wa.me/${cleanNumber}?text=${encodeURIComponent('مرحباً، أود الاستفسار بخصوص تطبيق SM Store')}`;
         const waLink = document.getElementById('footerWhatsappLink');
+        const heroWa = document.getElementById('heroWhatsappLink');
         if (waLink) waLink.href = waUrl;
-      }
-
-      // Format Telegram link
-      if (telegram) {
-        let tgUrl = telegram;
-        if (!tgUrl.startsWith('http')) {
-          tgUrl = `https://t.me/${telegram.replace('@', '')}`;
-        }
-        const heroTg = document.getElementById('heroTelegramLink');
-        const footerTg = document.getElementById('footerTelegramLink');
-        const dlTg = document.getElementById('telegramDownloadLink');
-
-        if (heroTg) heroTg.href = tgUrl;
-        if (footerTg) footerTg.href = tgUrl;
-        if (dlTg) dlTg.href = tgUrl;
+        if (heroWa) heroWa.href = waUrl;
       }
     } catch (_) {
       // Graceful fallback to default links
@@ -139,3 +125,4 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+

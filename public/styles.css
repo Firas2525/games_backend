@@ -1014,17 +1014,6 @@ body {
   color: #ffffff;
 }
 
-.social-pill.telegram {
-  background: rgba(34, 158, 217, 0.12);
-  color: #229ed9;
-  border: 1px solid rgba(34, 158, 217, 0.25);
-}
-
-.social-pill.telegram:hover {
-  background: #229ed9;
-  color: #ffffff;
-}
-
 .footer-bottom {
   display: flex;
   align-items: center;
@@ -1123,3 +1112,4 @@ body {
     text-align: center;
   }
 }
+
