@@ -44,47 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 3. Stats Counter Animation on Scroll
-  const stats = document.querySelectorAll('.stat-number');
-  let hasAnimated = false;
-
-  const animateStats = () => {
-    stats.forEach((stat) => {
-      const target = +stat.getAttribute('data-target');
-      const duration = 2000;
-      const stepTime = 30;
-      const totalSteps = duration / stepTime;
-      const increment = target / totalSteps;
-      let current = 0;
-
-      const timer = setInterval(() => {
-        current += increment;
-        if (current >= target) {
-          stat.innerText = target.toLocaleString();
-          clearInterval(timer);
-        } else {
-          stat.innerText = Math.floor(current).toLocaleString();
-        }
-      }, stepTime);
-    });
-  };
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting && !hasAnimated) {
-          hasAnimated = true;
-          animateStats();
-        }
-      });
-    },
-    { threshold: 0.3 }
-  );
-
-  const statsSection = document.querySelector('.stats-section');
-  if (statsSection) {
-    observer.observe(statsSection);
-  }
 
   // 4. Dynamic Live Support Links from Backend API
   const API_BASE = 'https://games-backend-c0h7.onrender.com/api/v1';
