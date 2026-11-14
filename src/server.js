@@ -4,7 +4,10 @@ import { ENV } from './config/env.js';
 import { autoSyncOnStartup } from './modules/products/products.service.js';
 import { ensureShortUserCodes } from './modules/users/users.service.js';
 import { startBackgroundOrderSyncWorker } from './modules/orders/orders.service.js';
-import { runBannerImagesMigration } from './modules/banners/banners.controller.js';
+import {
+  runBannerImagesMigration,
+  optimizeProductIndexes,
+} from './modules/banners/banners.controller.js';
 
 const startServer = async () => {
   // Connect to Database
@@ -19,10 +22,13 @@ const startServer = async () => {
   // Start background order sync worker for real-time order completion
   startBackgroundOrderSyncWorker();
 
-  // Zero-Downtime background migration of remaining legacy binary images to Cloudinary
+  // Zero-Downtime background migration & index optimization
   setTimeout(() => {
     runBannerImagesMigration().catch((e) =>
       console.warn('[Startup Cloudinary Migration Warning]:', e.message)
+    );
+    optimizeProductIndexes({ method: 'INTERNAL' }, { json: () => {} }, () => {}).catch((e) =>
+      console.warn('[Startup Index Optimization Warning]:', e.message)
     );
   }, 10000);
 

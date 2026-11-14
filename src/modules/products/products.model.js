@@ -16,13 +16,11 @@ const productSchema = new mongoose.Schema(
     externalId: {
       type: String,
       required: true,
-      index: true,
     },
     source: {
       type: String,
       required: true,
       enum: ['roya_usd', 'roya_syp', 'syria_card', 'sw_games', 'auto1card', 'brand1card', 'custom'],
-      index: true,
     },
     sourceName: {
       type: String,
@@ -38,25 +36,21 @@ const productSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      index: true,
     },
     mainCategory: {
       type: String,
       default: 'games',
       trim: true,
-      index: true,
     },
     subCategoryId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'SubCategory',
       default: null,
-      index: true,
     },
     subCategoryName: {
       type: String,
       default: '',
       trim: true,
-      index: true,
     },
     subCategoryImage: {
       type: String,
@@ -66,7 +60,6 @@ const productSchema = new mongoose.Schema(
     isCategoryOverridden: {
       type: Boolean,
       default: false,
-      index: true,
     },
     providerName: {
       type: String,
@@ -91,12 +84,10 @@ const productSchema = new mongoose.Schema(
     isNameOverridden: {
       type: Boolean,
       default: false,
-      index: true,
     },
     isImageOverridden: {
       type: Boolean,
       default: false,
-      index: true,
     },
     price: {
       type: Number,
@@ -116,7 +107,6 @@ const productSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       max: 100,
-      index: true,
     },
     currency: {
       type: String,
@@ -133,7 +123,6 @@ const productSchema = new mongoose.Schema(
     isVisible: {
       type: Boolean,
       default: true,
-      index: true,
     },
     minCount: {
       type: Number,

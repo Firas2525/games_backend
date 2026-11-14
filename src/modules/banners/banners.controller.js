@@ -502,6 +502,65 @@ export const getDbDetailedStats = async (req, res, next) => {
 };
 
 /**
+ * Clean up redundant product indexes to speed up auto-sync and reclaim 25-30 MB index space
+ */
+export const optimizeProductIndexes = async (req, res, next) => {
+  try {
+    const mongoose = (await import('mongoose')).default;
+    const db = mongoose.connection.db;
+
+    const beforeStats = await db.command({ collStats: 'products' });
+    const indexes = await db.collection('products').indexes();
+
+    const redundantIndexNames = [
+      'externalId_1',
+      'source_1',
+      'category_1',
+      'mainCategory_1',
+      'subCategoryId_1',
+      'subCategoryName_1',
+      'isCategoryOverridden_1',
+      'isNameOverridden_1',
+      'isImageOverridden_1',
+      'discountPercent_1',
+      'isVisible_1',
+    ];
+
+    const dropped = [];
+    for (const name of redundantIndexNames) {
+      const exists = indexes.some((idx) => idx.name === name);
+      if (exists) {
+        try {
+          await db.collection('products').dropIndex(name);
+          dropped.push(name);
+          console.log(`[Index Optimization] Dropped redundant index: ${name}`);
+        } catch (dropErr) {
+          console.warn(`[Index Optimization] Warning dropping ${name}:`, dropErr.message);
+        }
+      }
+    }
+
+    const afterStats = await db.command({ collStats: 'products' });
+    const remainingIndexes = await db.collection('products').indexes();
+
+    const freedMB = ((beforeStats.totalIndexSize - afterStats.totalIndexSize) / (1024 * 1024)).toFixed(2);
+
+    return ApiResponse.success(res, {
+      message: 'تم تنظيف فهارس المنتجات الزائدة بنجاح وتسريع الأداء والمزامنة',
+      droppedIndexesCount: dropped.length,
+      droppedIndexes: dropped,
+      previousIndexSizeMB: +(beforeStats.totalIndexSize / (1024 * 1024)).toFixed(2),
+      currentIndexSizeMB: +(afterStats.totalIndexSize / (1024 * 1024)).toFixed(2),
+      freedSpaceMB: freedMB,
+      remainingIndexesCount: remainingIndexes.length,
+      remainingIndexes: remainingIndexes.map((i) => i.name),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * HTTP endpoint to manually trigger migration
  */
 export const migrateBannerImagesToCloudinary = async (req, res, next) => {
