@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Banner, BannerImage } from './banners.model.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { cloudinaryService } from '../../services/cloudinary.service.js';
 
 // Default starter banners if none exist yet
 const DEFAULT_BANNERS = [
@@ -164,12 +165,23 @@ export const serveBannerImage = async (req, res, next) => {
   try {
     const { id } = req.params;
     const imageDoc = await BannerImage.findById(id);
-    if (!imageDoc || !imageDoc.data) {
+    if (!imageDoc) {
       return res.status(404).send('Image not found');
     }
-    res.setHeader('Content-Type', imageDoc.contentType || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=31536000');
-    return res.send(imageDoc.data);
+
+    // 1. Zero-Downtime: If migrated to Cloudinary, issue an instant 302 redirect to Cloudinary CDN
+    if (imageDoc.secureUrl) {
+      return res.redirect(302, imageDoc.secureUrl);
+    }
+
+    // 2. Legacy fallback: serve binary buffer if image has not been migrated yet
+    if (imageDoc.data) {
+      res.setHeader('Content-Type', imageDoc.contentType || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
+      return res.send(imageDoc.data);
+    }
+
+    return res.status(404).send('Image data not found');
   } catch (err) {
     next(err);
   }
@@ -177,82 +189,239 @@ export const serveBannerImage = async (req, res, next) => {
 
 export const uploadBannerImage = async (req, res, next) => {
   try {
-    const { file, uploadPreset, apiSecret } = req.body;
+    const { file, folder } = req.body;
 
     if (!file) {
       return ApiResponse.error(res, 'بيانات الصورة مطلوبة للرفع (file/base64)', 400);
     }
 
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'neevw5vw';
-    const apiKey = process.env.CLOUDINARY_API_KEY || '484589243988533';
-    const secret = apiSecret || process.env.CLOUDINARY_API_SECRET || '';
-    const preset = uploadPreset || process.env.CLOUDINARY_UPLOAD_PRESET || '';
-
-    try {
-      const url = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
-      const formData = new FormData();
-      formData.append('file', file);
-
-      if (secret) {
-        const timestamp = Math.round(Date.now() / 1000);
-        const stringToSign = `timestamp=${timestamp}${secret}`;
-        const signature = crypto.createHash('sha1').update(stringToSign).digest('hex');
-
-        formData.append('timestamp', timestamp.toString());
-        formData.append('api_key', apiKey);
-        formData.append('signature', signature);
-      } else if (preset) {
-        formData.append('upload_preset', preset);
-      } else {
-        formData.append('upload_preset', 'ml_default');
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (response.ok && (data.secure_url || data.url)) {
-        return ApiResponse.success(
-          res,
-          {
-            url: data.secure_url || data.url,
-            publicId: data.public_id,
-            format: data.format,
-            width: data.width,
-            height: data.height,
-          },
-          'تم رفع الصورة إلى Cloudinary بنجاح'
-        );
-      }
-    } catch (cloudErr) {
-      console.warn('Cloudinary upload failed, falling back to database storage:', cloudErr.message);
-    }
-
-    // Fallback: If Cloudinary fails (e.g. preset not configured), store image directly in DB and serve via backend URL
-    const matches = file.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    const contentType = matches ? matches[1] : 'image/jpeg';
-    const base64Data = matches ? matches[2] : file;
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    const imageDoc = await BannerImage.create({
-      data: buffer,
-      contentType,
+    // 1. Upload directly to Cloudinary using isolated service
+    const targetFolder = folder || 'games-platform/banners';
+    const uploadResult = await cloudinaryService.uploadImage({
+      file,
+      folder: targetFolder,
     });
 
-    const host = req.get('host');
-    const protocol = req.protocol === 'https' || req.headers['x-forwarded-proto'] === 'https' ? 'https' : req.protocol;
-    const directUrl = `${protocol}://${host}/api/v1/banners/images/${imageDoc._id}`;
+    // 2. Store metadata (URL & publicId) in MongoDB without any binary data
+    const imageDoc = await BannerImage.create({
+      secureUrl: uploadResult.url,
+      publicId: uploadResult.publicId,
+      format: uploadResult.format,
+      bytes: uploadResult.bytes || 0,
+      data: null, // ZERO binary storage in DB!
+    });
 
     return ApiResponse.success(
       res,
       {
-        url: directUrl,
-        publicId: imageDoc._id.toString(),
+        url: uploadResult.url,
+        publicId: uploadResult.publicId,
+        format: uploadResult.format,
+        width: uploadResult.width,
+        height: uploadResult.height,
+        imageId: imageDoc._id.toString(),
       },
-      'تم حفظ الصورة بنجاح'
+      'تم رفع الصورة إلى Cloudinary بنجاح'
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+let isMigrationRunning = false;
+let migrationStats = {
+  status: 'idle',
+  total: 0,
+  processed: 0,
+  migrated: 0,
+  failed: 0,
+  bytesFreed: 0,
+  startedAt: null,
+  finishedAt: null,
+  sampleUrls: [],
+  errors: [],
+};
+
+/**
+ * Check current migration progress & MongoDB binary data status
+ */
+export const getMigrationStatus = async (req, res) => {
+  try {
+    const remainingWithData = await BannerImage.countDocuments({ data: { $exists: true, $ne: null } });
+    const totalInDb = await BannerImage.countDocuments();
+    const withCloudinary = await BannerImage.countDocuments({ secureUrl: { $regex: 'cloudinary' } });
+
+    return ApiResponse.success(res, {
+      ...migrationStats,
+      dbLive: {
+        totalBannerImages: totalInDb,
+        withCloudinaryUrl: withCloudinary,
+        remainingWithBinaryData: remainingWithData,
+      },
+    });
+  } catch (err) {
+    return ApiResponse.error(res, err.message, 500);
+  }
+};
+
+/**
+ * Core function to run migration of all BannerImages to Cloudinary and free MongoDB binary buffer
+ */
+export const runBannerImagesMigration = async () => {
+  if (isMigrationRunning) {
+    console.log('[Cloudinary Migration] Already running in background.');
+    return migrationStats;
+  }
+
+  const docs = await BannerImage.find({
+    data: { $exists: true, $ne: null },
+  });
+
+  const total = docs.length;
+  if (total === 0) {
+    console.log('[Cloudinary Migration] No binary images found in MongoDB. Database is fully optimized.');
+    return { status: 'completed', total: 0, message: 'All images already in Cloudinary' };
+  }
+
+  isMigrationRunning = true;
+  migrationStats = {
+    status: 'running',
+    total,
+    processed: 0,
+    migrated: 0,
+    failed: 0,
+    bytesFreed: 0,
+    startedAt: new Date(),
+    finishedAt: null,
+    sampleUrls: [],
+    errors: [],
+  };
+
+  (async () => {
+    try {
+      console.log(`[Cloudinary Migration] >>> Starting migration of ${total} images to Cloudinary...`);
+
+      for (let i = 0; i < docs.length; i++) {
+        const doc = docs[i];
+        try {
+          if (!doc.data || doc.data.length === 0) {
+            await BannerImage.updateOne({ _id: doc._id }, { $unset: { data: 1 } });
+            migrationStats.processed++;
+            continue;
+          }
+
+          const bytes = doc.data.length;
+          const mimeType = doc.contentType || 'image/jpeg';
+          const base64Data = doc.data.toString('base64');
+          const dataUrl = `data:${mimeType};base64,${base64Data}`;
+
+          // Upload to Cloudinary under organized folder games-platform/banners
+          const uploadRes = await cloudinaryService.uploadImage({
+            file: dataUrl,
+            folder: 'games-platform/banners',
+            publicId: `banner_${doc._id.toString()}`,
+          });
+
+          // Update MongoDB: set secureUrl & publicId, and UNSET data buffer!
+          await BannerImage.updateOne(
+            { _id: doc._id },
+            {
+              $set: {
+                secureUrl: uploadRes.url,
+                publicId: uploadRes.publicId,
+                format: uploadRes.format,
+                bytes: uploadRes.bytes || bytes,
+              },
+              $unset: { data: 1 },
+            }
+          );
+
+          migrationStats.migrated++;
+          migrationStats.bytesFreed += bytes;
+
+          if (migrationStats.sampleUrls.length < 5) {
+            migrationStats.sampleUrls.push({ id: doc._id.toString(), url: uploadRes.url });
+          }
+
+          // Update direct references in banners collection
+          const directApiPattern = new RegExp(`/api/v1/banners/images/${doc._id.toString()}`);
+          await Banner.updateMany(
+            { imageUrl: directApiPattern },
+            { $set: { imageUrl: uploadRes.url } }
+          );
+
+          console.log(`[Cloudinary Migration] (${i + 1}/${total}) Migrated image ${doc._id} -> ${uploadRes.url} (${(bytes / 1024).toFixed(1)} KB freed)`);
+        } catch (err) {
+          console.error(`[Cloudinary Migration] Failed image ${doc._id}:`, err.message);
+          migrationStats.failed++;
+          if (migrationStats.errors.length < 10) {
+            migrationStats.errors.push({ id: doc._id.toString(), error: err.message });
+          }
+        } finally {
+          migrationStats.processed++;
+        }
+      }
+
+      // Update references across other collections
+      try {
+        const { Category } = await import('../products/categories.model.js');
+        const { SubCategory } = await import('../products/subcategories.model.js');
+        const { Product } = await import('../products/products.model.js');
+
+        const allMigrated = await BannerImage.find({ secureUrl: { $regex: 'cloudinary' } }, { _id: 1, secureUrl: 1 }).lean();
+        for (const m of allMigrated) {
+          const regex = new RegExp(`/api/v1/banners/images/${m._id}`);
+          await Category.updateMany({ imageUrl: regex }, { $set: { imageUrl: m.secureUrl } });
+          await SubCategory.updateMany({ imageUrl: regex }, { $set: { imageUrl: m.secureUrl } });
+          await Product.updateMany({ image: regex }, { $set: { image: m.secureUrl } });
+          await Product.updateMany({ customImage: regex }, { $set: { customImage: m.secureUrl } });
+          await Product.updateMany({ subCategoryImage: regex }, { $set: { subCategoryImage: m.secureUrl } });
+        }
+      } catch (refErr) {
+        console.warn('[Cloudinary Migration] Reference sync warning:', refErr.message);
+      }
+
+      migrationStats.status = 'completed';
+      migrationStats.finishedAt = new Date();
+      console.log(`[Cloudinary Migration] ✅ Migration completed! Migrated: ${migrationStats.migrated}/${total}, Freed: ${(migrationStats.bytesFreed / (1024 * 1024)).toFixed(2)} MB`);
+    } catch (fatalErr) {
+      migrationStats.status = 'error';
+      migrationStats.errors.push({ fatal: fatalErr.message });
+      console.error('[Cloudinary Migration] Fatal error:', fatalErr);
+    } finally {
+      isMigrationRunning = false;
+    }
+  })();
+
+  return migrationStats;
+};
+
+/**
+ * HTTP endpoint to manually trigger migration
+ */
+export const migrateBannerImagesToCloudinary = async (req, res, next) => {
+  try {
+    if (isMigrationRunning) {
+      return ApiResponse.error(res, 'عملية الترحيل قيد التشغيل بالفعل حالياً', 409);
+    }
+
+    await cloudinaryService.ping();
+
+    const count = await BannerImage.countDocuments({ data: { $exists: true, $ne: null } });
+    if (count === 0) {
+      return ApiResponse.success(res, { message: 'جميع الصور منقولة إلى Cloudinary بالفعل ولا توجد صور Binary في قاعدة البيانات' });
+    }
+
+    runBannerImagesMigration();
+
+    return ApiResponse.success(
+      res,
+      {
+        message: 'بدأت عملية الترحيل في الخلفية بنجاح إلى Cloudinary',
+        totalImagesToMigrate: count,
+        checkStatusUrl: '/api/v1/banners/admin/migration-status',
+      },
+      202
     );
   } catch (error) {
     next(error);

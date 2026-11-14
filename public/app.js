@@ -80,6 +80,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const toast = document.getElementById('downloadToast');
   let toastTimer = null;
 
+  const DOWNLOAD_URL = window.location.hostname.includes('onrender.com')
+    ? '/download'
+    : 'https://games-backend-c0h7.onrender.com/download';
+
   function showToast() {
     if (!toast) return;
     toast.classList.add('show');
@@ -105,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
         iframe.style.border = 'none';
         document.body.appendChild(iframe);
       }
-      iframe.src = '/download';
+      iframe.src = DOWNLOAD_URL;
     });
   });
 });

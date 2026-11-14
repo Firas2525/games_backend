@@ -4,6 +4,7 @@ import { ENV } from './config/env.js';
 import { autoSyncOnStartup } from './modules/products/products.service.js';
 import { ensureShortUserCodes } from './modules/users/users.service.js';
 import { startBackgroundOrderSyncWorker } from './modules/orders/orders.service.js';
+import { runBannerImagesMigration } from './modules/banners/banners.controller.js';
 
 const startServer = async () => {
   // Connect to Database
@@ -17,6 +18,13 @@ const startServer = async () => {
 
   // Start background order sync worker for real-time order completion
   startBackgroundOrderSyncWorker();
+
+  // Zero-Downtime background migration of remaining legacy binary images to Cloudinary
+  setTimeout(() => {
+    runBannerImagesMigration().catch((e) =>
+      console.warn('[Startup Cloudinary Migration Warning]:', e.message)
+    );
+  }, 10000);
 
   // Listen on PORT (Render sets process.env.PORT automatically)
   const server = app.listen(ENV.PORT, () => {

@@ -51,11 +51,30 @@ const bannerImageSchema = new mongoose.Schema(
   {
     data: {
       type: Buffer,
-      required: true,
+      required: false,
+      default: null,
     },
     contentType: {
       type: String,
       default: 'image/jpeg',
+    },
+    secureUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    publicId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    format: {
+      type: String,
+      default: '',
+    },
+    bytes: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true }
