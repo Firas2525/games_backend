@@ -9,6 +9,7 @@ import {
   migrateBannerImagesToCloudinary,
   getMigrationStatus,
   compactBannerImages,
+  getDbDetailedStats,
 } from './banners.controller.js';
 
 const router = Router();
@@ -23,6 +24,7 @@ router.post('/upload', uploadBannerImage);
 router.post('/admin/migrate-to-cloudinary', migrateBannerImagesToCloudinary);
 router.get('/admin/migration-status', getMigrationStatus);
 router.post('/admin/compact', compactBannerImages);
+router.get('/admin/db-stats', getDbDetailedStats);
 router.post('/', createBanner);
 router.delete('/:id', deleteBanner);
 

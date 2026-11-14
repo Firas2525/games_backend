@@ -456,6 +456,52 @@ export const compactBannerImages = async (req, res, next) => {
 };
 
 /**
+ * Get exact breakdown of current database consumption across all collections
+ */
+export const getDbDetailedStats = async (req, res, next) => {
+  try {
+    const mongoose = (await import('mongoose')).default;
+    const db = mongoose.connection.db;
+
+    const dbStats = await db.stats();
+    const collections = await db.listCollections().toArray();
+    const breakdown = [];
+
+    for (const col of collections) {
+      try {
+        const stats = await db.command({ collStats: col.name });
+        breakdown.push({
+          collection: col.name,
+          docs: stats.count,
+          dataSizeMB: +(stats.size / (1024 * 1024)).toFixed(3),
+          storageSizeMB: +(stats.storageSize / (1024 * 1024)).toFixed(3),
+          indexSizeMB: +(stats.totalIndexSize / (1024 * 1024)).toFixed(3),
+          totalMB: +((stats.storageSize + stats.totalIndexSize) / (1024 * 1024)).toFixed(3),
+          indexesCount: stats.nindexes,
+        });
+      } catch (_) {}
+    }
+
+    breakdown.sort((a, b) => b.totalMB - a.totalMB);
+
+    return ApiResponse.success(res, {
+      overall: {
+        dbName: db.databaseName,
+        totalDataSizeMB: +(dbStats.dataSize / (1024 * 1024)).toFixed(2),
+        totalStorageSizeMB: +(dbStats.storageSize / (1024 * 1024)).toFixed(2),
+        totalIndexSizeMB: +(dbStats.indexSize / (1024 * 1024)).toFixed(2),
+        totalPhysicalClusterConsumptionMB: +((dbStats.storageSize + dbStats.indexSize) / (1024 * 1024)).toFixed(2),
+        collectionsCount: dbStats.collections,
+        objectsCount: dbStats.objects,
+      },
+      collectionsBreakdown: breakdown,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * HTTP endpoint to manually trigger migration
  */
 export const migrateBannerImagesToCloudinary = async (req, res, next) => {
