@@ -381,6 +381,13 @@ export const runBannerImagesMigration = async () => {
         console.warn('[Cloudinary Migration] Reference sync warning:', refErr.message);
       }
 
+      // Physical disk storage reclamation: rebuild collection to drop Storage Size from 41 MB down to ~80 KB
+      try {
+        await rebuildBannerImagesStorage();
+      } catch (compactErr) {
+        console.warn('[Cloudinary Migration] Compact warning:', compactErr.message);
+      }
+
       migrationStats.status = 'completed';
       migrationStats.finishedAt = new Date();
       console.log(`[Cloudinary Migration] ✅ Migration completed! Migrated: ${migrationStats.migrated}/${total}, Freed: ${(migrationStats.bytesFreed / (1024 * 1024)).toFixed(2)} MB`);
@@ -394,6 +401,58 @@ export const runBannerImagesMigration = async () => {
   })();
 
   return migrationStats;
+};
+
+/**
+ * Rebuild collection to force WiredTiger to deallocate empty pre-allocated disk space
+ */
+export const rebuildBannerImagesStorage = async () => {
+  const mongoose = (await import('mongoose')).default;
+  const db = mongoose.connection.db;
+
+  console.log('[Compaction] Starting physical disk reclamation for bannerimages...');
+  const docs = await BannerImage.find({}).lean();
+
+  const tempColName = 'bannerimages_clean_' + Date.now();
+  const tempCol = db.collection(tempColName);
+
+  if (docs.length > 0) {
+    await tempCol.insertMany(docs);
+  }
+
+  // Drop bloated collection file on disk (frees 41.20 MB physical storage immediately)
+  await db.collection('bannerimages').drop();
+
+  // Rename clean collection to bannerimages
+  await tempCol.rename('bannerimages');
+
+  const stats = await db.command({ collStats: 'bannerimages' });
+  console.log(`[Compaction] ✅ Complete! Storage Size: ${(stats.storageSize / 1024).toFixed(2)} KB (Data Size: ${(stats.size / 1024).toFixed(2)} KB)`);
+
+  return {
+    storageSizeKB: (stats.storageSize / 1024).toFixed(2),
+    dataSizeKB: (stats.size / 1024).toFixed(2),
+    count: stats.count,
+  };
+};
+
+/**
+ * HTTP endpoint to manually trigger physical disk storage reclamation
+ */
+export const compactBannerImages = async (req, res, next) => {
+  try {
+    const result = await rebuildBannerImagesStorage();
+    return ApiResponse.success(
+      res,
+      {
+        message: 'تم تفريغ مساحة القرص فيزيائياً بنجاح وتقليص مساحة التخزين في MongoDB Atlas',
+        ...result,
+      },
+      200
+    );
+  } catch (err) {
+    next(err);
+  }
 };
 
 /**
