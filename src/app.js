@@ -55,7 +55,7 @@ let lastSourceUrl = null;
 
 app.get('/download', async (req, res) => {
   try {
-    let sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file';
+    let sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file';
     try {
       const { Settings } = await import('./modules/settings/settings.model.js');
       const settings = await Settings.findOne({ key: 'system_settings' }).lean();
@@ -96,7 +96,7 @@ app.get('/download', async (req, res) => {
     // Fallback: redirect to sourceUrl
     return res.redirect(sourceUrl);
   } catch (err) {
-    return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file');
+    return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file');
   }
 });
 

@@ -1061,6 +1061,20 @@ body {
   line-height: 1.4;
 }
 
+.toast-fallback-link {
+  display: inline-block;
+  font-size: 12px;
+  color: #38bdf8;
+  text-decoration: underline;
+  margin-top: 4px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.toast-fallback-link:hover {
+  color: #ffffff;
+}
+
 @media (max-width: 576px) {
   .download-toast {
     right: 16px;
