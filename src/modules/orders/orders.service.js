@@ -1119,12 +1119,6 @@ export const getAllOrdersAdmin = async (query = {}) => {
       timestamp: now,
     });
   }
-      total,
-      counts,
-      stats,
-      timestamp: now,
-    });
-  }
 
   const enrichedOrders = orders.map(enrichOrderWithInvoiceMeta);
 
