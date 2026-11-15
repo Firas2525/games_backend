@@ -265,23 +265,51 @@ export const createDepositRequest = async ({
   const rawNetAmount = Number((cleanAmount - feeAmount).toFixed(4));
 
   const userCurrency = (user.currency || 'USD').toUpperCase();
-  const methodCurrency = (method.currency || 'USD').toUpperCase();
+  const isCustom = method.currencyType === 'OTHER' || method.isCustomCurrency === true;
+  const methodCurrency = isCustom
+    ? (method.currencyUnit || method.currency || 'OTHER')
+    : (method.currency || 'USD').toUpperCase();
 
   let netAmount = rawNetAmount;
   let creditCurrency = userCurrency;
   let appliedRate = 1;
+  let amountInUsd = 0;
 
-  if (userCurrency === 'USD' && methodCurrency === 'SYP') {
+  if (isCustom) {
+    // Custom Currency (e.g. Iraqi Dinar, Turkish Lira, etc.)
+    // Formula: cleanAmount / ratePerUsd = USD equivalent
+    const ratePerUsd = Number(method.ratePerUsd) > 0 ? Number(method.ratePerUsd) : 1;
+    appliedRate = ratePerUsd;
+    const netCustomAmount = rawNetAmount;
+    const netAmountInUsd = Number((netCustomAmount / ratePerUsd).toFixed(4));
+    amountInUsd = Number((cleanAmount / ratePerUsd).toFixed(2));
+
+    if (userCurrency === 'USD') {
+      netAmount = Number(netAmountInUsd.toFixed(2));
+      creditCurrency = 'USD';
+    } else {
+      // User wallet is SYP: convert USD equivalent to SYP based on system exchange rate
+      netAmount = Math.round(netAmountInUsd * exchangeRate);
+      creditCurrency = 'SYP';
+      appliedRate = exchangeRate;
+    }
+  } else if (userCurrency === 'USD' && methodCurrency === 'SYP') {
     // USD User depositing in SYP:
     // Convert SYP net amount to USD equivalent based on exchange rate
     appliedRate = exchangeRate;
     netAmount = Number((rawNetAmount / exchangeRate).toFixed(2));
+    amountInUsd = netAmount;
     creditCurrency = 'USD';
   } else if (userCurrency === 'SYP' && methodCurrency === 'USD') {
     // SYP User depositing in USD:
     appliedRate = exchangeRate;
+    amountInUsd = rawNetAmount;
     netAmount = Math.round(rawNetAmount * exchangeRate);
     creditCurrency = 'SYP';
+  } else if (userCurrency === 'USD') {
+    amountInUsd = rawNetAmount;
+  } else if (userCurrency === 'SYP') {
+    amountInUsd = Number((rawNetAmount / exchangeRate).toFixed(2));
   }
 
   // Generate friendly unique 6-digit deposit ID
@@ -314,7 +342,11 @@ export const createDepositRequest = async ({
     netAmount,
     feePercent,
     feeAmount,
-    sourceCurrency: method.currency,
+    sourceCurrency: isCustom ? (method.currencyUnit || method.currency || 'OTHER') : method.currency,
+    currencyType: isCustom ? 'OTHER' : (method.currency === 'SYP' ? 'SYP' : 'USD'),
+    currencyUnit: method.currencyUnit || '',
+    ratePerUsd: Number(method.ratePerUsd) || 1,
+    amountInUsd,
     creditCurrency,
     exchangeRate: appliedRate,
     operationNumber: cleanOperation,
@@ -453,11 +485,21 @@ export const acceptDeposit = async ({ depositId, adminId, adminEmail = '' }) => 
   await deposit.save();
 
   // Record audit transaction
-  const acceptNote = (deposit.sourceCurrency === 'SYP' && deposit.creditCurrency === 'USD')
-    ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ل.س = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
-    : (deposit.sourceCurrency === 'USD' && deposit.creditCurrency === 'SYP')
-    ? `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} $ = معادل ${creditAmount} ل.س (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`
-    : `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`;
+  let acceptNote = '';
+  if (deposit.currencyType === 'OTHER') {
+    const unit = deposit.currencyUnit || deposit.sourceCurrency || 'وحدة';
+    if (deposit.creditCurrency === 'USD') {
+      acceptNote = `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ${unit} = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.ratePerUsd} ${unit}) - رقم العملية: ${deposit.operationNumber}`;
+    } else {
+      acceptNote = `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ${unit} = معادل ${deposit.amountInUsd} $ = ${creditAmount} ل.س (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`;
+    }
+  } else if (deposit.sourceCurrency === 'SYP' && deposit.creditCurrency === 'USD') {
+    acceptNote = `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} ل.س = معادل ${creditAmount} $ (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`;
+  } else if (deposit.sourceCurrency === 'USD' && deposit.creditCurrency === 'SYP') {
+    acceptNote = `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle}: مدفوع ${deposit.amount} $ = معادل ${creditAmount} ل.س (سعر صرف 1$ = ${deposit.exchangeRate} ل.س) - رقم العملية: ${deposit.operationNumber}`;
+  } else {
+    acceptNote = `قبول إيداع (${deposit.depositId}) عبر ${deposit.methodTitle} - رقم العملية: ${deposit.operationNumber}`;
+  }
 
   const transaction = await Transaction.create({
     userId: user._id,
@@ -554,20 +596,29 @@ export const getAllMethodsAdmin = async () => {
  * Admin: Create custom deposit method
  */
 export const createDepositMethod = async (data) => {
-  const key = String(data.key || data.title || '')
+  let key = String(data.key || data.title || '')
     .toLowerCase()
     .trim()
     .replace(/\s+/g, '_')
     .replace(/[^\w]/g, '');
 
-  const existing = await DepositMethod.findOne({ key });
-  if (existing) {
-    throw new ApiError(`طريقة الإيداع بهذا المعرف (${key}) موجودة مسبقاً`, HTTP_STATUS.CONFLICT);
+  if (!key) {
+    key = `method_${Date.now()}`;
   }
 
+  const existing = await DepositMethod.findOne({ key });
+  if (existing) {
+    key = `${key}_${Date.now().toString().slice(-4)}`;
+  }
+
+  const isCustom = data.currencyType === 'OTHER' || data.isCustomCurrency === true;
   const method = await DepositMethod.create({
     ...data,
-    key: key || `method_${Date.now()}`,
+    key,
+    currencyType: isCustom ? 'OTHER' : (data.currency === 'SYP' ? 'SYP' : 'USD'),
+    isCustomCurrency: isCustom,
+    currencyUnit: String(data.currencyUnit || '').trim(),
+    ratePerUsd: Number(data.ratePerUsd) > 0 ? Number(data.ratePerUsd) : 1,
   });
   return method.toJSON();
 };
@@ -576,7 +627,17 @@ export const createDepositMethod = async (data) => {
  * Admin: Update deposit method
  */
 export const updateDepositMethod = async (id, data) => {
-  const method = await DepositMethod.findByIdAndUpdate(id, data, { new: true });
+  const isCustom = data.currencyType === 'OTHER' || data.isCustomCurrency === true;
+  const updatePayload = {
+    ...data,
+    ...(data.currencyType ? {
+      currencyType: isCustom ? 'OTHER' : (data.currency === 'SYP' ? 'SYP' : 'USD'),
+      isCustomCurrency: isCustom,
+    } : {}),
+    ...(data.currencyUnit !== undefined ? { currencyUnit: String(data.currencyUnit || '').trim() } : {}),
+    ...(data.ratePerUsd !== undefined ? { ratePerUsd: Number(data.ratePerUsd) > 0 ? Number(data.ratePerUsd) : 1 } : {}),
+  };
+  const method = await DepositMethod.findByIdAndUpdate(id, updatePayload, { new: true });
   if (!method) {
     throw new ApiError('طريقة الإيداع غير موجودة', HTTP_STATUS.NOT_FOUND);
   }

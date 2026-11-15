@@ -62,8 +62,26 @@ const depositSchema = new mongoose.Schema(
     },
     sourceCurrency: {
       type: String,
-      enum: ['USD', 'SYP'],
       default: 'USD',
+      trim: true,
+    },
+    currencyType: {
+      type: String,
+      enum: ['USD', 'SYP', 'OTHER'],
+      default: 'USD',
+    },
+    currencyUnit: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    ratePerUsd: {
+      type: Number,
+      default: 1,
+    },
+    amountInUsd: {
+      type: Number,
+      default: 0,
     },
     creditCurrency: {
       type: String,

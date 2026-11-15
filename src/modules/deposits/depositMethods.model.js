@@ -30,8 +30,27 @@ const depositMethodSchema = new mongoose.Schema(
     },
     currency: {
       type: String,
-      enum: ['USD', 'SYP'],
       default: 'USD',
+      trim: true,
+    },
+    currencyType: {
+      type: String,
+      enum: ['USD', 'SYP', 'OTHER'],
+      default: 'USD',
+    },
+    currencyUnit: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    ratePerUsd: {
+      type: Number,
+      default: 1,
+      min: 0.0000001,
+    },
+    isCustomCurrency: {
+      type: Boolean,
+      default: false,
     },
     account: {
       type: String,
