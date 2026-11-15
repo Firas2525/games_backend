@@ -55,6 +55,7 @@ let lastSourceUrl = null;
 
 app.get('/download', async (req, res) => {
   try {
+    let sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file';
     let sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file';
     try {
       const { Settings } = await import('./modules/settings/settings.model.js');
@@ -96,6 +97,7 @@ app.get('/download', async (req, res) => {
     // Fallback: redirect to sourceUrl
     return res.redirect(sourceUrl);
   } catch (err) {
+    return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file');
     return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file');
   }
 });
@@ -125,6 +127,7 @@ app.get('/test-brand', async (req, res) => {
       process.env.BRAND1CARD_API_TOKEN ||
       '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
     const apiUrl =
+      req.query.url ||
       process.env.BRAND1CARD_API_URL ||
       'https://api.brand-one-card.com/client/api/products';
     const ipRes = await fetch('https://api.ipify.org?format=json')

@@ -464,8 +464,18 @@ export const dispatchProviderOrder = async ({
     statusCode = 504;
     isSuccess = false;
     finalStatus = 'failed';
-    errorMessage = 'حدث خطأ حاول لاحقا';
-    responseData = { error: err.message };
+    const isTimeout = err.name === 'AbortError' || err.message?.includes('aborted');
+    const causeText = isTimeout
+      ? 'انتهت مهلة الاتصال بالمزود (Timeout 35s - لم يستجب سيرفر المزود)'
+      : (err.cause?.message || err.cause?.code || String(err.cause || 'فشل الاتصال بالشبكة'));
+    errorMessage = isTimeout
+      ? 'انتهت مهلة استجابة سيرفر المزود'
+      : 'فشل الاتصال بسيرفر المزود (تأكد من عنوان IP أو الرابط)';
+    responseData = {
+      error: err.message,
+      cause: causeText,
+      targetUrl,
+    };
   }
 
   const durationMs = Date.now() - startTime;
