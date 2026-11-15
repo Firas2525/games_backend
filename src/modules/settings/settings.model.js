@@ -77,6 +77,34 @@ const settingsSchema = new mongoose.Schema(
       default: 'نقوم حالياً ببعض أعمال الصيانة والتحسينات الدورية لنقدم لكم تجربة أفضل وأسرع. سنعود للعمل قريباً جداً، نشكر تفهمكم!',
       trim: true,
     },
+    appVersion: {
+      type: String,
+      default: '1.0.0',
+      trim: true,
+    },
+    appBuildNumber: {
+      type: Number,
+      default: 1,
+    },
+    isForceUpdate: {
+      type: Boolean,
+      default: false,
+    },
+    updateTitle: {
+      type: String,
+      default: 'تحديث جديد متوفر 🚀',
+      trim: true,
+    },
+    updateNotes: {
+      type: String,
+      default: 'يتوفر إصدار جديد يحتوي على تحسينات هامة وسرعة أكبر في تنفيذ الطلبات وإصلاحات عامة.',
+      trim: true,
+    },
+    appDownloadUrl: {
+      type: String,
+      default: 'https://games-backend-c0h7.onrender.com/download',
+      trim: true,
+    },
   },
   {
     timestamps: true,

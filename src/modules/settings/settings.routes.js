@@ -8,6 +8,8 @@ import {
   updateLevelBadge,
   getMaintenance,
   updateMaintenance,
+  getAppUpdate,
+  updateAppUpdate,
 } from './settings.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 import { ROLES } from '../../constants/roles.js';
@@ -19,6 +21,7 @@ router.get('/', getSettings);
 router.get('/ticker', getTicker);
 router.get('/levels', getLevels);
 router.get('/maintenance', getMaintenance);
+router.get('/app-update', getAppUpdate);
 
 // Admin-only update
 router.patch('/', authenticate, authorize(ROLES.ADMIN), updateSettings);
@@ -29,5 +32,7 @@ router.patch('/levels/badge', authenticate, authorize(ROLES.ADMIN), updateLevelB
 router.post('/levels/badge', authenticate, authorize(ROLES.ADMIN), updateLevelBadge);
 router.patch('/maintenance', authenticate, authorize(ROLES.ADMIN), updateMaintenance);
 router.post('/maintenance', authenticate, authorize(ROLES.ADMIN), updateMaintenance);
+router.patch('/app-update', authenticate, authorize(ROLES.ADMIN), updateAppUpdate);
+router.post('/app-update', authenticate, authorize(ROLES.ADMIN), updateAppUpdate);
 
 export default router;

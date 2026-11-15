@@ -158,4 +158,85 @@ export const updateMaintenanceSettings = async ({ isMaintenance, maintenanceTitl
   };
 };
 
+function compareSemver(v1, v2) {
+  const p1 = String(v1 || '0').split('.').map((x) => parseInt(x, 10) || 0);
+  const p2 = String(v2 || '0').split('.').map((x) => parseInt(x, 10) || 0);
+  const len = Math.max(p1.length, p2.length);
+  for (let i = 0; i < len; i++) {
+    const a = p1[i] || 0;
+    const b = p2[i] || 0;
+    if (a > b) return 1;
+    if (a < b) return -1;
+  }
+  return 0;
+}
+
+export const getAppUpdateSettings = async (clientQuery = {}) => {
+  const settings = await getSettings();
+  const latestVersion = settings.appVersion || '1.0.0';
+  const latestBuildNumber = Number(settings.appBuildNumber) || 1;
+  const isForceUpdate = Boolean(settings.isForceUpdate);
+  const updateTitle = settings.updateTitle || 'تحديث جديد متوفر 🚀';
+  const updateNotes =
+    settings.updateNotes ||
+    'يتوفر إصدار جديد يحتوي على تحسينات هامة وسرعة أكبر في تنفيذ الطلبات وإصلاحات عامة.';
+  const appDownloadUrl =
+    settings.appDownloadUrl || 'https://games-backend-c0h7.onrender.com/download';
+
+  const clientVersion = clientQuery.currentVersion || clientQuery.version || '';
+  const clientBuild = parseInt(clientQuery.currentBuildNumber || clientQuery.buildNumber, 10);
+
+  let hasUpdate = false;
+  if (!isNaN(clientBuild) && clientBuild > 0) {
+    hasUpdate = latestBuildNumber > clientBuild;
+  } else if (clientVersion) {
+    hasUpdate = compareSemver(latestVersion, clientVersion) > 0;
+  }
+
+  return {
+    hasUpdate,
+    isForceUpdate,
+    latestVersion,
+    latestBuildNumber,
+    updateTitle,
+    updateNotes,
+    appDownloadUrl,
+    updatedAt: settings.updatedAt,
+  };
+};
+
+export const updateAppUpdateSettings = async ({
+  appVersion,
+  appBuildNumber,
+  isForceUpdate,
+  updateTitle,
+  updateNotes,
+  appDownloadUrl,
+}) => {
+  let settings = await Settings.findOne({ key: 'system_settings' });
+  if (!settings) {
+    settings = new Settings({ key: 'system_settings' });
+  }
+
+  if (appVersion !== undefined) settings.appVersion = String(appVersion || '').trim();
+  if (appBuildNumber !== undefined) settings.appBuildNumber = Number(appBuildNumber) || 1;
+  if (isForceUpdate !== undefined) settings.isForceUpdate = Boolean(isForceUpdate);
+  if (updateTitle !== undefined) settings.updateTitle = String(updateTitle || '').trim();
+  if (updateNotes !== undefined) settings.updateNotes = String(updateNotes || '').trim();
+  if (appDownloadUrl !== undefined) settings.appDownloadUrl = String(appDownloadUrl || '').trim();
+
+  await settings.save();
+
+  return {
+    appVersion: settings.appVersion,
+    appBuildNumber: settings.appBuildNumber,
+    isForceUpdate: Boolean(settings.isForceUpdate),
+    updateTitle: settings.updateTitle,
+    updateNotes: settings.updateNotes,
+    appDownloadUrl: settings.appDownloadUrl,
+    updatedAt: settings.updatedAt,
+  };
+};
+
+
 

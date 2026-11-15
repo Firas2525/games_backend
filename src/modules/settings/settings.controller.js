@@ -45,4 +45,14 @@ export const updateMaintenance = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, result, msg);
 });
 
+export const getAppUpdate = asyncHandler(async (req, res) => {
+  const result = await settingsService.getAppUpdateSettings(req.query);
+  return ApiResponse.success(res, result, 'App update settings fetched successfully');
+});
+
+export const updateAppUpdate = asyncHandler(async (req, res) => {
+  const result = await settingsService.updateAppUpdateSettings(req.body);
+  return ApiResponse.success(res, result, 'تم حفظ إعدادات تحديث التطبيق بنجاح 🚀');
+});
+
 
