@@ -1037,35 +1037,33 @@ export const getAllOrdersAdmin = async (query = {}) => {
   } else {
     const [fetchedOrders, fetchedTotal, statusAgg, financialAgg] = await Promise.all([
       ordersPromise,
-      Order.countDocuments(filter),
+      Order.countDocuments(filter).catch(() => 0),
       Order.aggregate([
         { $match: baseFilterWithoutStatus },
         { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
+      ]).catch((err) => {
+        console.warn('[Admin statusAgg fallback]:', err.message);
+        return [];
+      }),
       Order.aggregate([
         { $match: filter },
         {
           $group: {
-            _id: {
-              isSyp: {
-                $or: [
-                  { $eq: ['$currency', 'SYP'] },
-                  { $eq: ['$currency', 'syp'] },
-                  { $eq: ['$currency', 'ل.س'] },
-                ],
-              },
-            },
+            _id: '$currency',
             totalRevenue: { $sum: '$userPrice' },
             totalCost: { $sum: '$costPrice' },
             totalProfit: { $sum: '$profit' },
             count: { $sum: 1 },
           },
         },
-      ]),
+      ]).catch((err) => {
+        console.warn('[Admin financialAgg fallback]:', err.message);
+        return [];
+      }),
     ]);
 
-    orders = fetchedOrders;
-    total = fetchedTotal;
+    orders = fetchedOrders || [];
+    total = fetchedTotal || orders.length;
 
     counts = {
       all: 0,
@@ -1076,11 +1074,13 @@ export const getAllOrdersAdmin = async (query = {}) => {
       cancelled: 0,
     };
 
-    for (const item of statusAgg) {
-      if (item._id && counts[item._id] !== undefined) {
-        counts[item._id] = item.count;
+    if (Array.isArray(statusAgg)) {
+      for (const item of statusAgg) {
+        if (item._id && counts[item._id] !== undefined) {
+          counts[item._id] = item.count;
+        }
+        counts.all += item.count || 0;
       }
-      counts.all += item.count;
     }
 
     stats = {
@@ -1088,21 +1088,21 @@ export const getAllOrdersAdmin = async (query = {}) => {
       syp: { revenue: 0, cost: 0, profit: 0, count: 0 },
     };
 
-    for (const f of financialAgg) {
-      if (f._id?.isSyp) {
-        stats.syp = {
-          revenue: Math.round(f.totalRevenue || 0),
-          cost: Math.round(f.totalCost || 0),
-          profit: Math.round(f.totalProfit || 0),
-          count: f.count || 0,
-        };
-      } else {
-        stats.usd = {
-          revenue: Number((f.totalRevenue || 0).toFixed(2)),
-          cost: Number((f.totalCost || 0).toFixed(2)),
-          profit: Number((f.totalProfit || 0).toFixed(2)),
-          count: f.count || 0,
-        };
+    if (Array.isArray(financialAgg)) {
+      for (const f of financialAgg) {
+        const curr = String(f._id || '').toUpperCase();
+        const isSyp = curr === 'SYP' || curr === 'ل.س';
+        if (isSyp) {
+          stats.syp.revenue += Math.round(f.totalRevenue || 0);
+          stats.syp.cost += Math.round(f.totalCost || 0);
+          stats.syp.profit += Math.round(f.totalProfit || 0);
+          stats.syp.count += f.count || 0;
+        } else {
+          stats.usd.revenue += Number((f.totalRevenue || 0).toFixed(2));
+          stats.usd.cost += Number((f.totalCost || 0).toFixed(2));
+          stats.usd.profit += Number((f.totalProfit || 0).toFixed(2));
+          stats.usd.count += f.count || 0;
+        }
       }
     }
 
@@ -1113,6 +1113,12 @@ export const getAllOrdersAdmin = async (query = {}) => {
     }
 
     adminAggCache.set(cacheKey, {
+      total,
+      counts,
+      stats,
+      timestamp: now,
+    });
+  }
       total,
       counts,
       stats,
