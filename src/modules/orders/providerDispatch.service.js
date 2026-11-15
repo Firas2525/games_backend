@@ -690,6 +690,7 @@ export const checkExternalOrderStatus = async (order) => {
         const singleUrl = `https://sw-games.net/api/fastapi/order/${providerOrderId}`;
         const singleRes = await fetch(singleUrl, {
           headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+          signal: AbortSignal.timeout(5000),
         });
 
         if (singleRes.ok) {
@@ -714,6 +715,7 @@ export const checkExternalOrderStatus = async (order) => {
       const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${providerOrderId}`;
       const res = await fetch(url, {
         headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+        signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
         const data = await res.json();
@@ -762,6 +764,7 @@ export const checkExternalOrderStatus = async (order) => {
       const url = `https://api.brand-one-card.com/client/api/check?orders=[${providerOrderId}]`;
       const res = await fetch(url, {
         headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+        signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
         const data = await res.json();
@@ -827,6 +830,7 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
     const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${idsString}`;
     const res = await fetch(url, {
       headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+      signal: AbortSignal.timeout(6000),
     });
 
     if (res.ok) {
@@ -886,7 +890,8 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
   }
 
   // Fallback for any order not resolved by checkorders, OR completed without reply/card details: use /order/{id}
-  for (const o of orders) {
+  // Strictly limit to at most 3 candidate orders per cycle with short timeouts to protect socket pool
+  const candidateOrders = orders.filter((o) => {
     const key = o._id.toString();
     const existingRes = results.get(key);
     const hasReplyDetails =
@@ -897,39 +902,43 @@ export const checkSwGamesOrdersBatch = async (orders, isSyp = false) => {
         existingRes.rawData.pin ||
         existingRes.rawData.serial ||
         existingRes.rawData.cards);
+    return !existingRes || (existingRes.status === 'completed' && !hasReplyDetails);
+  }).slice(0, 3);
 
-    if (!existingRes || (existingRes.status === 'completed' && !hasReplyDetails)) {
-      const singleId =
-        existingRes?.providerOrderNumber ||
-        o.providerOrderId ||
-        o.providerPayload?.params?.order_uuid ||
-        o.orderId;
-      if (singleId) {
-        try {
-          const singleUrl = `https://sw-games.net/api/fastapi/order/${singleId}`;
-          const singleRes = await fetch(singleUrl, {
-            headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
-          });
-          if (singleRes.ok) {
-            const singleData = await singleRes.json();
-            const orderObj = singleData?.data?.order || singleData?.order;
-            if (orderObj) {
-              const raw = String(orderObj.status || '').toLowerCase();
-              let resolvedStatus = existingRes?.status || 'processing';
-              if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted'].includes(raw)) {
-                resolvedStatus = 'completed';
-              } else if (['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused'].includes(raw)) {
-                resolvedStatus = 'failed';
-              }
-              results.set(key, {
-                status: resolvedStatus,
-                providerOrderNumber: orderObj.order_number || o.providerOrderId,
-                rawData: { ...(existingRes?.rawData || {}), ...orderObj },
-              });
+  for (const o of candidateOrders) {
+    const key = o._id.toString();
+    const existingRes = results.get(key);
+    const singleId =
+      existingRes?.providerOrderNumber ||
+      o.providerOrderId ||
+      o.providerPayload?.params?.order_uuid ||
+      o.orderId;
+    if (singleId) {
+      try {
+        const singleUrl = `https://sw-games.net/api/fastapi/order/${singleId}`;
+        const singleRes = await fetch(singleUrl, {
+          headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (singleRes.ok) {
+          const singleData = await singleRes.json();
+          const orderObj = singleData?.data?.order || singleData?.order;
+          if (orderObj) {
+            const raw = String(orderObj.status || '').toLowerCase();
+            let resolvedStatus = existingRes?.status || 'processing';
+            if (['1', 'true', 'completed', 'complete', 'done', 'success', 'accepted'].includes(raw)) {
+              resolvedStatus = 'completed';
+            } else if (['2', '3', 'cancelled', 'canceled', 'cancel', 'failed', 'fail', 'error', 'rejected', 'refused'].includes(raw)) {
+              resolvedStatus = 'failed';
             }
+            results.set(key, {
+              status: resolvedStatus,
+              providerOrderNumber: orderObj.order_number || o.providerOrderId,
+              rawData: { ...(existingRes?.rawData || {}), ...orderObj },
+            });
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
     }
   }
 
