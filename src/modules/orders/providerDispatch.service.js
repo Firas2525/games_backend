@@ -249,6 +249,70 @@ export function isProviderClearFailure(result, statusCode) {
   return false;
 }
 
+/**
+ * Fast verification probe if order was registered on provider
+ */
+export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = false }) => {
+  if (!orderUuid) return { found: false, message: 'لا يوجد رقم طلب مرجعي للتحقق' };
+  try {
+    if (source === 'roya_usd' || source === 'roya_syp' || source === 'sw_games') {
+      const token = isSyp
+        ? (process.env.SW_GAMES_SYP_TOKEN || 'yzhm54xr2dh6778klm34c5y21')
+        : (process.env.SW_GAMES_USD_TOKEN || 'i1zz8ajhxca9419asucqcmj6z6');
+      const probeCtrl = new AbortController();
+      const probeTimeout = setTimeout(() => probeCtrl.abort(), 6000);
+      const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${orderUuid}`;
+      const res = await fetch(url, {
+        headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+        signal: probeCtrl.signal,
+      });
+      clearTimeout(probeTimeout);
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data?.data?.orders)
+          ? data.data.orders
+          : Array.isArray(data?.orders)
+          ? data.orders
+          : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+          ? data
+          : [];
+        const match = list.find((o) => {
+          const keys = [o.order_number, o.order_id, o.id, o.uuid].filter(Boolean).map(String);
+          return keys.includes(String(orderUuid));
+        });
+        if (match) {
+          return { found: true, orderObj: match, message: 'تم تأكيد تسجيل الطلب لدى المزود بنجاح' };
+        }
+        return { found: false, message: 'تم فحص سيرفر المزود: لم يُسجل هذا الطلب لدى المزود ولم يُخصم أي مبلغ' };
+      }
+    } else if (source === 'brand1card') {
+      const token =
+        process.env.BRAND1CARD_API_TOKEN ||
+        '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
+      const probeCtrl = new AbortController();
+      const probeTimeout = setTimeout(() => probeCtrl.abort(), 6000);
+      const url = `https://api.brand-one-card.com/client/api/checkOrder/${orderUuid}`;
+      const res = await fetch(url, {
+        headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+        signal: probeCtrl.signal,
+      });
+      clearTimeout(probeTimeout);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.status === 'OK' && data?.data) {
+          return { found: true, orderObj: data.data, message: 'تم تأكيد تسجيل الطلب لدى براند كارد بنجاح' };
+        }
+        return { found: false, message: 'تم فحص سيرفر براند كارد: لم يُسجل هذا الطلب لدى المزود ولم يُخصم أي مبلغ' };
+      }
+    }
+  } catch (probeErr) {
+    return { found: false, message: `تعذر التحقق التلقائي: ${probeErr.message}` };
+  }
+  return { found: false, message: 'لم يتم التحقق من المزود' };
+};
+
 export const dispatchProviderOrder = async ({
   product,
   orderId,
@@ -388,6 +452,10 @@ export const dispatchProviderOrder = async ({
   let isSuccess = false;
   let finalStatus = 'processing';
   let errorMessage = '';
+  let errorPhase = '';
+  let failureReason = '';
+  let providerVerification = '';
+  let rawErrorText = '';
 
   try {
     const controller = new AbortController();
@@ -412,8 +480,6 @@ export const dispatchProviderOrder = async ({
     const extractedOrderId = extractProviderOrderId(responseData);
     const clearFailure = isProviderClearFailure(responseData, statusCode);
 
-    let rawErrorText = '';
-
     if (source === 'brand1card') {
       // Brand One Card response protocol:
       // { status: 'OK', data: { order_id: 123, status: 'accept' | 'wait' | 'reject', replay_api: [...] } }
@@ -428,18 +494,24 @@ export const dispatchProviderOrder = async ({
         } else {
           isSuccess = false;
           finalStatus = 'failed';
+          errorPhase = 'PROVIDER_REJECTED';
           rawErrorText =
             extractRawProviderErrorText(responseData) ||
             'تم رفض الطلب من براند كارد';
+          failureReason = `رفض المزود (براند كارد): ${rawErrorText}`;
           errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
+          providerVerification = 'تم استلام رد رسمي من براند كارد برفض الطلب';
         }
       } else {
         isSuccess = false;
         finalStatus = 'failed';
+        errorPhase = 'PROVIDER_REJECTED';
         rawErrorText =
           extractRawProviderErrorText(responseData) ||
           'فشل إرسال الطلب إلى براند كارد';
+        failureReason = `رفض المزود (براند كارد): ${rawErrorText}`;
         errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
+        providerVerification = 'تم استلام رد برفض الطلب من براند كارد';
       }
     } else {
       // SW Games (Roya) & Auto1Card
@@ -454,28 +526,85 @@ export const dispatchProviderOrder = async ({
       } else {
         isSuccess = false;
         finalStatus = 'failed';
+        errorPhase = 'PROVIDER_REJECTED';
         rawErrorText =
           extractRawProviderErrorText(responseData) ||
-          (statusCode >= 400 ? `خطأ مزود الخدمة (${statusCode})` : 'رفض المزود الطلب');
+          (statusCode >= 400 ? `خطأ مزود الخدمة (HTTP ${statusCode})` : 'رفض المزود الطلب');
+        failureReason = `رفض المزود (${source}): ${rawErrorText}`;
         errorMessage = mapProviderUserErrorMessage(rawErrorText, responseData);
+        providerVerification = `وصل الطلب إلى سيرفر المزود ورد بكود HTTP ${statusCode}`;
       }
     }
   } catch (err) {
-    statusCode = 504;
-    isSuccess = false;
-    finalStatus = 'failed';
-    const isTimeout = err.name === 'AbortError' || err.message?.includes('aborted');
-    const causeText = isTimeout
-      ? 'انتهت مهلة الاتصال بالمزود (Timeout 35s - لم يستجب سيرفر المزود)'
-      : (err.cause?.message || err.cause?.code || String(err.cause || 'فشل الاتصال بالشبكة'));
-    errorMessage = isTimeout
-      ? 'انتهت مهلة استجابة سيرفر المزود'
-      : 'فشل الاتصال بسيرفر المزود (تأكد من عنوان IP أو الرابط)';
-    responseData = {
-      error: err.message,
-      cause: causeText,
-      targetUrl,
-    };
+    const isTimeout = err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.message?.includes('aborted');
+    const causeCode = err.cause?.code || err.code || '';
+    const causeMsg = err.cause?.message || err.message || '';
+
+    if (isTimeout) {
+      errorPhase = 'TIMEOUT';
+      statusCode = 504;
+      failureReason = 'انتهت مهلة استجابة سيرفر المزود (35 ثانية) دون أي رد';
+      errorMessage = 'انتهت مهلة استجابة سيرفر المزود';
+    } else if (causeCode === 'ECONNRESET') {
+      errorPhase = 'NETWORK_ERROR';
+      statusCode = 502;
+      failureReason = 'تم قطع اتصال الشبكة من سيرفر المزود أو جدار الحماية (Cloudflare WAF / TCP RST)';
+      errorMessage = 'تعذر الاتصال بسيرفر المزود (تم قطع الاتصال)';
+    } else if (causeCode === 'ENOTFOUND') {
+      errorPhase = 'NETWORK_ERROR';
+      statusCode = 502;
+      failureReason = 'تعذر الوصول إلى عنوان سيرفر المزود (فشل استعلام DNS)';
+      errorMessage = 'تعذر الوصول إلى سيرفر المزود';
+    } else if (causeCode === 'ECONNREFUSED') {
+      errorPhase = 'NETWORK_ERROR';
+      statusCode = 502;
+      failureReason = 'سيرفر المزود يرفض استقبال أي اتصال حالياً (السيرفر معطل أو متوقف)';
+      errorMessage = 'سيرفر المزود لا يستقبل طلبات حالياً';
+    } else if (causeCode === 'ETIMEDOUT') {
+      errorPhase = 'NETWORK_ERROR';
+      statusCode = 504;
+      failureReason = 'انتهت مهلة إنشاء الاتصال بسيرفر المزود (TCP Connect Timed Out)';
+      errorMessage = 'انتهت مهلة الاتصال بالشبكة مع المزود';
+    } else {
+      errorPhase = 'NETWORK_ERROR';
+      statusCode = 502;
+      failureReason = `فشل الاتصال بسيرفر المزود قبل استلام أي استجابة: ${causeMsg || err.message}`;
+      errorMessage = 'فشل الاتصال بسيرفر المزود';
+    }
+
+    // Fast automated probe: Did the provider actually receive & create the order despite connection failure?
+    try {
+      const probe = await probeProviderOrderExistence({
+        source,
+        orderUuid,
+        isSyp: source === 'roya_syp',
+      });
+      if (probe.found && probe.orderObj) {
+        // Order actually exists on provider side! Do not fail order!
+        isSuccess = true;
+        finalStatus = 'processing';
+        responseData = probe.orderObj;
+        providerVerification = 'تم تأكيد تسجيل الطلب لدى المزود بالرغم من انقطاع الاتصال الأولي!';
+      } else {
+        providerVerification = probe.message;
+      }
+    } catch (_) {
+      providerVerification = 'تعذر الاستعلام من المزود للتحقق';
+    }
+
+    if (!isSuccess) {
+      finalStatus = 'failed';
+      responseData = {
+        error: err.message,
+        errorPhase,
+        causeCode: causeCode || '',
+        causeMessage: causeMsg || '',
+        failureReason,
+        providerVerification,
+        reachedProvider: false,
+        targetUrl,
+      };
+    }
   }
 
   const durationMs = Date.now() - startTime;
@@ -507,17 +636,29 @@ export const dispatchProviderOrder = async ({
     responseBody: responseData,
     durationMs,
     isSuccess,
-    errorMessage: isSuccess ? '' : (extractRawProviderErrorText(responseData) || errorMessage),
+    errorMessage: isSuccess ? '' : (rawErrorText || failureReason || errorMessage),
   });
 
   return {
     success: isSuccess,
     status: finalStatus,
+    errorPhase: isSuccess ? '' : errorPhase,
+    failureReason: isSuccess ? '' : failureReason,
+    providerVerification,
+    statusCode,
     providerPayload: { targetUrl, params, headers: sanitizedHeaders },
     providerResponse: responseData,
     providerOrderId: String(providerOrderId),
-    errorMessage: isSuccess ? '' : (errorMessage || 'حدث خطأ حاول لاحقا'),
+    errorMessage: isSuccess ? '' : (errorMessage || failureReason || 'حدث خطأ حاول لاحقا'),
     userMessage: isSuccess ? 'تم استقبال الطلب بنجاح' : (errorMessage || 'حدث خطأ حاول لاحقا'),
+    errorDetails: isSuccess ? null : {
+      errorPhase,
+      failureReason,
+      providerVerification,
+      statusCode,
+      rawError: rawErrorText || responseData?.error || responseData?.message || '',
+      reachedProvider: errorPhase === 'PROVIDER_REJECTED',
+    },
   };
 };
 

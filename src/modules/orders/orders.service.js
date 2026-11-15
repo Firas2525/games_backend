@@ -19,6 +19,7 @@ import {
   extractOrderImages,
   formatDurationArabic,
   resolveOrderCompletionMeta,
+  probeProviderOrderExistence,
 } from './providerDispatch.service.js';
 
 export const enrichOrderWithInvoiceMeta = (rawOrder) => {
@@ -471,7 +472,7 @@ export const executePurchase = async ({
     user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - profit).toFixed(4));
     await user.save();
 
-    // Create Order Record with 'failed' status for transparency
+    // Create Order Record with 'failed' status and rich diagnostic evidence for transparency
     await Order.create({
       orderId,
       userId: user._id,
@@ -486,14 +487,19 @@ export const executePurchase = async ({
       costPrice: totalCost,
       userPrice: totalUserPrice,
       profit: 0,
-      profitPercentage,
       profitPercentage: actualProfitPercentage,
       discountPercent,
       currency: effectiveCurrency,
       status: 'failed',
+      refunded: true,
       providerOrderId: dispatchResult.providerOrderId || '',
       providerPayload: dispatchResult.providerPayload || basePayload,
       providerResponse: dispatchResult.providerResponse || null,
+      failureReason: dispatchResult.failureReason || dispatchResult.errorMessage || '',
+      errorPhase: dispatchResult.errorPhase || '',
+      errorDetails: dispatchResult.errorDetails || null,
+      providerVerification: dispatchResult.providerVerification || '',
+      httpStatusCode: dispatchResult.statusCode || null,
     });
 
     const userFacingError =
@@ -1147,13 +1153,45 @@ export const checkSingleOrder = async (orderId) => {
     throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
   }
 
-  if (order.status === 'failed' && order.refunded) {
-    return {
-      order: enrichOrderWithInvoiceMeta(order),
-      updated: false,
-      status: order.status,
-      message: 'الطلب ملغي ومسترجع مسبقاً',
-    };
+  if (order.status === 'failed') {
+    // Admin checking provider verification for a failed order
+    const orderUuid =
+      order.providerOrderId ||
+      order.providerPayload?.params?.order_uuid ||
+      order.providerPayload?.params?.uuid ||
+      order.orderId;
+    try {
+      const probe = await probeProviderOrderExistence({
+        source: order.source,
+        orderUuid,
+        isSyp: order.source === 'roya_syp' || order.currency === 'SYP',
+      });
+      order.providerVerification = probe.message;
+      if (probe.found && probe.orderObj) {
+        order.providerResponse = probe.orderObj;
+        await order.save();
+        return {
+          order: enrichOrderWithInvoiceMeta(order),
+          updated: true,
+          status: order.status,
+          message: `تنبيه: الطلب مسجل لدى المزود بالفعل! (${probe.message})`,
+        };
+      }
+      await order.save();
+      return {
+        order: enrichOrderWithInvoiceMeta(order),
+        updated: false,
+        status: order.status,
+        message: probe.message || 'تم فحص سيرفر المزود: الطلب غير موجود لدى المزود إطلاقاً ومسترجع مسبقاً',
+      };
+    } catch (probeErr) {
+      return {
+        order: enrichOrderWithInvoiceMeta(order),
+        updated: false,
+        status: order.status,
+        message: `تعذر فحص المزود: ${probeErr.message}`,
+      };
+    }
   }
 
   let updated = false;

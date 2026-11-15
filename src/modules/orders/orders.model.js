@@ -99,6 +99,26 @@ const orderSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null,
     },
+    failureReason: {
+      type: String,
+      default: '',
+    },
+    errorPhase: {
+      type: String,
+      default: '',
+    },
+    errorDetails: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    providerVerification: {
+      type: String,
+      default: '',
+    },
+    httpStatusCode: {
+      type: Number,
+      default: null,
+    },
     refunded: {
       type: Boolean,
       default: false,
