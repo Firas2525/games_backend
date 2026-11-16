@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { SalaryService, SalaryWithdrawalRequest } from './salaryWithdrawal.model.js';
 import { User } from '../users/users.model.js';
 import { Transaction } from '../users/transactions.model.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification } from '../../config/firebaseAdmin.js';
@@ -99,7 +99,7 @@ export const submitSalaryWithdrawal = async (req, res) => {
     const netDollars = Number(Math.max(0, grossDollars - feeDollars).toFixed(4));
 
     const settings = await getSettings();
-    const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+    const exchangeRate = getEffectiveExchangeRates(settings).buyRate;
 
     const isUserSyp = req.user?.currency === 'SYP';
     let creditedAmount = netDollars;
@@ -384,7 +384,7 @@ export const updateSalaryWithdrawalStatus = async (req, res) => {
       }
 
       const settings = await getSettings();
-      const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+      const exchangeRate = getEffectiveExchangeRates(settings).buyRate;
 
       // Determine dollars amount: use netDollars, calculatedDollars, or fallback
       let dollarsAmount = Number(request.netDollars || request.calculatedDollars || 0);

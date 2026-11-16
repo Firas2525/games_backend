@@ -9,7 +9,7 @@ import { detectMainCategory, cleanName } from './utils/categorizer.js';
 import { seedLegacyOverrides } from '../../scripts/seedLegacyOverrides.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import { serverCache } from '../../utils/memoryCache.js';
 
 const BROWSER_USER_AGENT =
@@ -1514,7 +1514,7 @@ export const getSubCategories = async (
   ]);
   const globalProfitPercentage = settings.profitPercentage || 0;
   const { catMap, subCatMap } = profitMaps;
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
   const productsBySubId = {};
   for (const p of products) {
     if (p.currency === 'BOTH' || p.currency === 'ALL' || !p.currency) {
@@ -2042,7 +2042,7 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
   const globalProfitPercentage = settings.profitPercentage || 0;
   const { catMap, subCatMap } = profitMaps;
   const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
 
   let productQuery = Product.find(filter)
     .select('-rawPayload')
@@ -2183,7 +2183,7 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
         String(userCurrency).includes('ل.س') ||
         String(userCurrency).includes('ليرة'))
   );
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
 
   if (userCurrency) {
     if (!isUserSyp) {

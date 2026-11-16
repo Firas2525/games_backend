@@ -5,7 +5,7 @@ import { Transaction } from '../users/transactions.model.js';
 import { Product } from '../products/products.model.js';
 import { Category } from '../products/categories.model.js';
 import { SubCategory } from '../products/subcategories.model.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
@@ -298,7 +298,7 @@ export const executePurchase = async ({
   }
 
   // If user is SYP and custom product was created in USD, convert to SYP using exchange rate:
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
   let exchangeAdjustedCost = baseCost;
   if (isUserSyp && isCustom && !isProductSyp) {
     baseCost = Math.round(baseCost * exchangeRate);
@@ -588,7 +588,7 @@ export const executePurchase = async ({
     const isCashbackActive = settings.isCashbackActive !== false;
     const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
     const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
-    const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+    const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
 
     if (isCashbackActive && cashbackPercentage > 0) {
       let spentInUsd = totalUserPrice;
@@ -1730,7 +1730,8 @@ export const handleRoyaWebhook = async (data = {}) => {
 export const getProfitReportsAdmin = async (query = {}) => {
   const period = query.period || 'monthly'; // 'weekly', 'monthly', 'yearly', 'all'
   const settings = await getSettings();
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const rates = getEffectiveExchangeRates(settings);
+  const exchangeRate = rates.sellRate;
 
   const now = new Date();
   let startDate;
@@ -2102,6 +2103,8 @@ export const getProfitReportsAdmin = async (query = {}) => {
     startDate: startDate.toISOString(),
     endDate: endDate.toISOString(),
     exchangeRate,
+    exchangeRateBuy: rates.buyRate,
+    exchangeRateSell: rates.sellRate,
     summary: {
       totalRevenueUsd,
       totalCostUsd,

@@ -3,7 +3,7 @@ import { DepositMethod } from './depositMethods.model.js';
 import { Deposit } from './deposits.model.js';
 import { User } from '../users/users.model.js';
 import { Transaction } from '../users/transactions.model.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
@@ -250,12 +250,15 @@ export const createDepositRequest = async ({
     throw new ApiError('رقم العملية هذا تم إرساله مسبقاً، يرجى التحقق من الرقم المدخل', HTTP_STATUS.CONFLICT);
   }
 
-  // Get system daily exchange rate
-  let exchangeRate = 15000;
+  // Get system daily exchange rates (Buy & Sell)
+  let exchangeRateBuy = 15000;
+  let exchangeRateSell = 15000;
   try {
     const settings = await getSettings();
-    if (settings && settings.exchangeRateUsdToSyp) {
-      exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+    if (settings) {
+      const rates = getEffectiveExchangeRates(settings);
+      exchangeRateBuy = rates.buyRate;
+      exchangeRateSell = rates.sellRate;
     }
   } catch (_) {}
 
@@ -288,28 +291,30 @@ export const createDepositRequest = async ({
       netAmount = Number(netAmountInUsd.toFixed(2));
       creditCurrency = 'USD';
     } else {
-      // User wallet is SYP: convert USD equivalent to SYP based on system exchange rate
-      netAmount = Math.round(netAmountInUsd * exchangeRate);
+      // User wallet is SYP: user receives SYP -> Buy Rate (سعر الشراء المنخفض)
+      netAmount = Math.round(netAmountInUsd * exchangeRateBuy);
       creditCurrency = 'SYP';
-      appliedRate = exchangeRate;
+      appliedRate = exchangeRateBuy;
     }
   } else if (userCurrency === 'USD' && methodCurrency === 'SYP') {
-    // USD User depositing in SYP:
-    // Convert SYP net amount to USD equivalent based on exchange rate
-    appliedRate = exchangeRate;
-    netAmount = Number((rawNetAmount / exchangeRate).toFixed(2));
+    // USD User depositing in SYP (buying USD with SYP):
+    // Higher Sell Rate applies (سعر المبيع المرتفع)
+    appliedRate = exchangeRateSell;
+    netAmount = Number((rawNetAmount / exchangeRateSell).toFixed(2));
     amountInUsd = netAmount;
     creditCurrency = 'USD';
   } else if (userCurrency === 'SYP' && methodCurrency === 'USD') {
-    // SYP User depositing in USD:
-    appliedRate = exchangeRate;
+    // SYP User depositing in USD (receiving SYP in wallet):
+    // Lower Buy Rate applies (سعر الشراء المنخفض)
+    appliedRate = exchangeRateBuy;
     amountInUsd = rawNetAmount;
-    netAmount = Math.round(rawNetAmount * exchangeRate);
+    netAmount = Math.round(rawNetAmount * exchangeRateBuy);
     creditCurrency = 'SYP';
   } else if (userCurrency === 'USD') {
     amountInUsd = rawNetAmount;
   } else if (userCurrency === 'SYP') {
-    amountInUsd = Number((rawNetAmount / exchangeRate).toFixed(2));
+    // User is SYP depositing SYP, reference amount in USD using sell rate
+    amountInUsd = Number((rawNetAmount / exchangeRateSell).toFixed(2));
   }
 
   // Generate friendly unique 6-digit deposit ID

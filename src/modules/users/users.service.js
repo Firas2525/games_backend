@@ -8,7 +8,7 @@ import { SalaryWithdrawalRequest } from '../salary_withdrawals/salaryWithdrawal.
 import { VerificationRequest } from '../verification/verification.model.js';
 import { ApiLog } from '../logs/apiLog.model.js';
 import { ROLES } from '../../constants/roles.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendDirectUserNotification } from '../../config/firebaseAdmin.js';
@@ -354,8 +354,9 @@ export const getCoinsInfo = async (userId) => {
   }
 
   const settings = await getSettings();
+  const rates = getEffectiveExchangeRates(settings);
   const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = rates.buyRate; // User receives SYP wallet credit -> Buy Rate
   const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
   const isCashbackActive = settings.isCashbackActive !== false;
 
@@ -365,7 +366,7 @@ export const getCoinsInfo = async (userId) => {
   // Value in USD - truncated to 2 decimal places (ignoring any digits beyond 2 decimals, strictly no rounding up!)
   const rawUsd = userCoins / coinsPerDollar;
   const equivalentUsd = truncateTo2Decimals(rawUsd);
-  // Value in SYP (calculated from the truncated USD value)
+  // Value in SYP (calculated from the truncated USD value using buy rate)
   const equivalentSyp = Math.floor(equivalentUsd * exchangeRate);
 
   // The actual credit the user will get in their wallet currency
@@ -379,6 +380,8 @@ export const getCoinsInfo = async (userId) => {
     coins: userCoins,
     coinsPerDollar,
     exchangeRate,
+    exchangeRateBuy: rates.buyRate,
+    exchangeRateSell: rates.sellRate,
     cashbackPercentage,
     isCashbackActive,
     userCurrency,
@@ -409,8 +412,9 @@ export const redeemCoins = async (userId, requestedCoins) => {
   }
 
   const settings = await getSettings();
+  const rates = getEffectiveExchangeRates(settings);
   const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const exchangeRate = rates.buyRate; // User receives SYP wallet credit -> Buy Rate (سعر الشراء)
 
   // Calculate raw USD value & strictly truncate to 2 decimals (ignoring any digits after 2 decimal places, no rounding up!)
   const rawUsd = coinsToRedeem / coinsPerDollar;

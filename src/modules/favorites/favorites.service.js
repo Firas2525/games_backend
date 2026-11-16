@@ -3,7 +3,7 @@ import { Favorite } from './favorites.model.js';
 import { Product } from '../products/products.model.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
-import { getSettings } from '../settings/settings.service.js';
+import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
 import {
   calcSmartPrice,
   getCategoryProfitMap,
@@ -91,8 +91,8 @@ export const getUserFavorites = async (userId, userCurrency = null) => {
   const settings = await getSettings();
   const globalProfitPercentage = settings.profitPercentage || 0;
   const { catMap, subCatMap } = await getCategoryProfitMap();
-  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('\u0633') || String(userCurrency).includes('\u0644\u064A\u0631\u0629')));
-  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+  const isUserSyp = Boolean(userCurrency && (String(userCurrency).toUpperCase().includes('SYP') || String(userCurrency).includes('ل.س') || String(userCurrency).includes('ليرة')));
+  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
 
   const products = validItems.map((item) => {
     const doc = item.productId;

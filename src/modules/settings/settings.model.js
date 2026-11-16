@@ -27,6 +27,20 @@ const settingsSchema = new mongoose.Schema(
       default: 15000,
       min: 1,
     },
+    exchangeRateUsdToSypBuy: {
+      type: Number,
+      default: function () {
+        return this.exchangeRateUsdToSyp || 15000;
+      },
+      min: 1,
+    },
+    exchangeRateUsdToSypSell: {
+      type: Number,
+      default: function () {
+        return this.exchangeRateUsdToSyp || 15000;
+      },
+      min: 1,
+    },
     levelBadges: {
       type: Map,
       of: String,
