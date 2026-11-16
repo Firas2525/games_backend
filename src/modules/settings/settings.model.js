@@ -133,6 +133,9 @@ const settingsSchema = new mongoose.Schema(
         if (!ret.verificationRequiredFields || !Array.isArray(ret.verificationRequiredFields)) {
           ret.verificationRequiredFields = ['الاسم الثلاثي'];
         }
+        const base = ret.exchangeRateUsdToSyp || 15000;
+        ret.exchangeRateUsdToSypBuy = Number(ret.exchangeRateUsdToSypBuy) > 0 ? Number(ret.exchangeRateUsdToSypBuy) : base;
+        ret.exchangeRateUsdToSypSell = Number(ret.exchangeRateUsdToSypSell) > 0 ? Number(ret.exchangeRateUsdToSypSell) : base;
         delete ret._id;
         delete ret.__v;
         return ret;

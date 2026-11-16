@@ -17,6 +17,14 @@ export const getSettings = async () => {
       maintenanceMessage: 'نقوم حالياً ببعض أعمال الصيانة والتحسينات الدورية لنقدم لكم تجربة أفضل وأسرع. سنعود للعمل قريباً جداً، نشكر تفهمكم!',
     });
   }
+  // Ensure buy and sell rates are populated for older documents
+  const base = settings.exchangeRateUsdToSyp || 15000;
+  if (!settings.exchangeRateUsdToSypBuy) {
+    settings.exchangeRateUsdToSypBuy = base;
+  }
+  if (!settings.exchangeRateUsdToSypSell) {
+    settings.exchangeRateUsdToSypSell = base;
+  }
   return settings;
 };
 
@@ -31,6 +39,7 @@ export const getEffectiveExchangeRates = (settings = {}) => {
   const sellRate = Number(settings?.exchangeRateUsdToSypSell) > 0 ? Number(settings.exchangeRateUsdToSypSell) : baseRate;
   return { buyRate, sellRate, baseRate };
 };
+
 
 export const updateSettings = async (data = {}) => {
   let settings = await Settings.findOne({ key: 'system_settings' });
@@ -79,18 +88,6 @@ export const updateSettings = async (data = {}) => {
   }
   await settings.save();
   return settings;
-};
-
-/**
- * Returns effective exchange rates:
- * - buyRate: lower rate, used when user receives SYP (e.g. deposit into SYP account, salary withdrawal to SYP, USD->SYP conversion).
- * - sellRate: higher rate, used when user buys goods or buys USD with SYP (e.g. products priced in SYP, SYP->USD deposit/conversion).
- */
-export const getEffectiveExchangeRates = (settings = {}) => {
-  const baseRate = Number(settings?.exchangeRateUsdToSyp) || 15000;
-  const buyRate = Number(settings?.exchangeRateUsdToSypBuy) > 0 ? Number(settings.exchangeRateUsdToSypBuy) : baseRate;
-  const sellRate = Number(settings?.exchangeRateUsdToSypSell) > 0 ? Number(settings.exchangeRateUsdToSypSell) : baseRate;
-  return { buyRate, sellRate, baseRate };
 };
 
 export const getTickerSettings = async () => {
