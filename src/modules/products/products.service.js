@@ -766,6 +766,7 @@ export const toggleProductVisibility = async (id) => {
 
   product.isVisible = !product.isVisible;
   await product.save();
+  serverCache.clearAll();
   return product;
 };
 
@@ -903,23 +904,27 @@ export const buildCurrencyProductFilter = (currencyStr) => {
   const c = String(currencyStr).trim().toUpperCase();
   if (c === 'SYP' || c === 'ل.س' || c === 'ليرة' || c === 'SYRIAN POUND') {
     // SYP USER: Strict isolation:
-    // Only Roya SYP (roya_syp) and Custom products.
-    // Roya USD (roya_usd), Brand 1 Card (brand1card), and legacy sw_games are strictly excluded.
+    // Custom products are always included regardless of default denomination (auto-converted to SYP).
+    // For non-custom products: only Roya SYP (roya_syp) or SYP-denominated products; Roya USD, brand1card, sw_games excluded.
     return {
       $and: [
         syriaCardExclude,
         {
-          source: { $nin: ['roya_usd', 'sw_games', 'brand1card'] },
-        },
-        {
-          currency: { $nin: ['$', 'USD', 'usd'] },
-        },
-        {
           $or: [
-            { source: 'roya_syp' },
-            { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] } },
-            { sourceName: { $regex: 'ليرة', $options: 'i' } },
             { source: 'custom' },
+            {
+              $and: [
+                { source: { $nin: ['roya_usd', 'sw_games', 'brand1card'] } },
+                { currency: { $nin: ['$', 'USD', 'usd'] } },
+                {
+                  $or: [
+                    { source: 'roya_syp' },
+                    { currency: { $in: ['ل.س', 'SYP', 'syp', 'BOTH', 'ALL', 'both', 'all'] } },
+                    { sourceName: { $regex: 'ليرة', $options: 'i' } },
+                  ],
+                },
+              ],
+            },
           ],
         },
       ],
@@ -928,30 +933,20 @@ export const buildCurrencyProductFilter = (currencyStr) => {
 
   if (c === 'USD' || c === '$' || c === 'دولار') {
     // USD USER: Strict isolation:
-    // Only Roya USD (roya_usd), Brand 1 Card (brand1card), and Custom USD products.
-    // Roya SYP (roya_syp) and any Lira product are strictly excluded.
+    // Custom products are always included regardless of default denomination (auto-converted to USD).
+    // For non-custom products: Roya USD (roya_usd), Brand 1 Card (brand1card), sw_games; Roya SYP and Lira products excluded.
     return {
       $and: [
         syriaCardExclude,
         {
-          source: { $nin: ['roya_syp'] },
-        },
-        {
-          currency: { $nin: ['ل.س', 'SYP', 'syp'] },
-        },
-        {
-          sourceName: { $not: { $regex: 'ليرة', $options: 'i' } },
-        },
-        {
           $or: [
-            { source: { $in: ['roya_usd', 'brand1card', 'sw_games'] } },
+            { source: 'custom' },
             {
-              source: 'custom',
-              $or: [
-                { currency: { $in: ['$', 'USD', 'usd', 'BOTH', 'ALL', 'both', 'all'] } },
-                { currency: null },
-                { currency: { $exists: false } },
-                { currency: '' },
+              $and: [
+                { source: { $nin: ['roya_syp'] } },
+                { currency: { $nin: ['ل.س', 'SYP', 'syp'] } },
+                { sourceName: { $not: { $regex: 'ليرة', $options: 'i' } } },
+                { source: { $in: ['roya_usd', 'brand1card', 'sw_games'] } },
               ],
             },
           ],
@@ -1567,6 +1562,13 @@ export const getSubCategories = async (
         if (p.originalPrice) p.originalPrice = Math.round(p.originalPrice * exchangeRate);
       }
       p.currency = 'ل.س';
+    } else {
+      if (p.source === 'custom' && (p.currency === 'ل.س' || p.currency === 'SYP')) {
+        p.price = exchangeRate > 0 ? Number(((p.price || 0) / exchangeRate).toFixed(2)) : p.price;
+        if (p.sellingPrice) p.sellingPrice = exchangeRate > 0 ? Number((p.sellingPrice / exchangeRate).toFixed(2)) : p.sellingPrice;
+        if (p.originalPrice) p.originalPrice = exchangeRate > 0 ? Number((p.originalPrice / exchangeRate).toFixed(2)) : p.originalPrice;
+      }
+      p.currency = '$';
     }
     const sId = p.subCategoryId?.toString();
     if (sId) {
@@ -2112,6 +2114,13 @@ export const getUserProducts = async (query = {}, userCurrency = null, userCusto
         const sypFloor = Math.round(convertedCost * (1 + minProfitFloor / 100));
         convertedFinalPrice = Math.max(Math.round(finalPrice * exchangeRate), sypFloor);
       }
+    } else {
+      finalCurrency = '$';
+      if (isCustom && (doc.currency === 'ل.س' || doc.currency === 'SYP')) {
+        convertedCost = exchangeRate > 0 ? Number((baseCost / exchangeRate).toFixed(2)) : baseCost;
+        convertedPriceBeforeDiscount = exchangeRate > 0 ? Number((priceBeforeDiscount / exchangeRate).toFixed(2)) : priceBeforeDiscount;
+        convertedFinalPrice = exchangeRate > 0 ? Number((finalPrice / exchangeRate).toFixed(2)) : finalPrice;
+      }
     }
 
     return {
@@ -2185,7 +2194,7 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
   );
   const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
 
-  if (userCurrency) {
+  if (userCurrency && product.source !== 'custom') {
     if (!isUserSyp) {
       // USD user: strictly block Roya SYP or Syrian Lira products
       const isProductSyp =
@@ -2526,6 +2535,13 @@ export const getProductDetails = async (id, userCurrency = null, userCustomProfi
       const sypFloor = Math.round(customBaseCost * (1 + minProfitFloor / 100));
       customUserPrice = Math.max(Math.round(fallbackUserPrice * exchangeRate), sypFloor);
     }
+  } else {
+    resolvedCustomCurrency = '$';
+    if (isCustom && (product.currency === 'ل.س' || product.currency === 'SYP')) {
+      customBaseCost = exchangeRate > 0 ? Number((fallbackBaseCost / exchangeRate).toFixed(2)) : fallbackBaseCost;
+      customPriceBefore = exchangeRate > 0 ? Number((fallbackPriceBeforeDiscount / exchangeRate).toFixed(2)) : fallbackPriceBeforeDiscount;
+      customUserPrice = exchangeRate > 0 ? Number((fallbackUserPrice / exchangeRate).toFixed(2)) : fallbackUserPrice;
+    }
   }
 
   const fallbackCounts = resolvePackageCounts(product);
@@ -2690,6 +2706,8 @@ export const createCustomProduct = async (data) => {
     note: note?.trim() || '',
   });
 
+  serverCache.clearAll();
+
   return product;
 };
 
@@ -2757,6 +2775,7 @@ export const updateCustomProduct = async (id, data) => {
   if (note !== undefined) product.note = note.trim();
 
   await product.save();
+  serverCache.clearAll();
   return product;
 };
 
