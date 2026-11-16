@@ -5,7 +5,7 @@ import { Transaction } from '../users/transactions.model.js';
 import { Product } from '../products/products.model.js';
 import { Category } from '../products/categories.model.js';
 import { SubCategory } from '../products/subcategories.model.js';
-import { getSettings, getEffectiveExchangeRates } from '../settings/settings.service.js';
+import { getSettings } from '../settings/settings.service.js';
 import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
@@ -298,7 +298,7 @@ export const executePurchase = async ({
   }
 
   // If user is SYP and custom product was created in USD, convert to SYP using exchange rate:
-  const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
   let exchangeAdjustedCost = baseCost;
   if (isUserSyp && isCustom && !isProductSyp) {
     baseCost = Math.round(baseCost * exchangeRate);
@@ -401,16 +401,49 @@ export const executePurchase = async ({
     );
   }
 
-  // 4. Deduct user balance and update metrics
-  const previousBalance = currentBalance;
-  const newBalance = Number((previousBalance - totalUserPrice).toFixed(4));
-  user.balance = Math.max(0, newBalance);
-  user.totalSpent = Number(((user.totalSpent || 0) + totalUserPrice).toFixed(4));
-  user.totalProfit = Number(((user.totalProfit || 0) + profit).toFixed(4));
-  await user.save();
+  // 4. Atomically deduct user balance and update metrics (Prevents race conditions)
+  const deductedUser = await User.findOneAndUpdate(
+    { _id: user._id, balance: { $gte: totalUserPrice } },
+    {
+      $inc: {
+        balance: -totalUserPrice,
+        totalSpent: totalUserPrice,
+        totalProfit: profit,
+      },
+    },
+    { new: true }
+  );
+
+  if (!deductedUser) {
+    const freshUser = await User.findById(user._id).select('balance');
+    const actualBal = freshUser?.balance || 0;
+    throw new ApiError(
+      `الرصيد غير كافٍ. رصيدك الحالي هو ${actualBal.toFixed(2)} ${effectiveCurrency} والمطلوب ${totalUserPrice.toFixed(2)} ${effectiveCurrency}`,
+      HTTP_STATUS.BAD_REQUEST
+    );
+  }
+
+  const previousBalance = Number((deductedUser.balance + totalUserPrice).toFixed(4));
+  const newBalance = deductedUser.balance;
 
   // 5. Generate clean 6 to 7 digit unique order ID
   const orderId = await generateShortOrderId();
+
+  // Create initial Transaction record so every balance debit has a visible ledger entry
+  const transaction = await Transaction.create({
+    userId: user._id,
+    type: 'purchase',
+    currency: user.currency || 'USD',
+    amount: totalUserPrice,
+    costPrice: totalCost,
+    profit,
+    productName: finalProductName,
+    targetId: targetId || '',
+    orderId,
+    previousBalance,
+    newBalance,
+    note: `شراء: ${finalProductName} (${targetId || 'رقم الحساب'})`,
+  });
 
   // 6. Dispatch order to external Provider API (SW Games / Brand1Card / Auto1Card)
   const basePayload = {
@@ -464,13 +497,39 @@ export const executePurchase = async ({
     }
   }
 
-  // 7. Handle Provider Failure with Immediate Refund & Sanitized User Error Reporting
+  // 7. Handle Provider Failure with Immediate Atomic Refund & Full Ledger Entry
   if (!dispatchResult.success) {
-    // Revert user balance deduction immediately (Automatic Refund)
-    user.balance = previousBalance;
-    user.totalSpent = Number(Math.max(0, (user.totalSpent || 0) - totalUserPrice).toFixed(4));
-    user.totalProfit = Number(Math.max(0, (user.totalProfit || 0) - profit).toFixed(4));
-    await user.save();
+    // Atomically restore user balance deduction immediately (Atomic Refund)
+    const refundedUser = await User.findByIdAndUpdate(
+      user._id,
+      {
+        $inc: {
+          balance: totalUserPrice,
+          totalSpent: -totalUserPrice,
+          totalProfit: -profit,
+        },
+      },
+      { new: true }
+    );
+
+    const refundPrevBalance = Number((refundedUser.balance - totalUserPrice).toFixed(4));
+    const refundNewBalance = refundedUser.balance;
+
+    // Create a corresponding refund transaction so ledger is 100% balanced
+    await Transaction.create({
+      userId: user._id,
+      type: 'refund',
+      currency: user.currency || 'USD',
+      amount: totalUserPrice,
+      costPrice: totalCost,
+      profit: 0,
+      productName: finalProductName,
+      targetId: targetId || '',
+      orderId,
+      previousBalance: refundPrevBalance,
+      newBalance: refundNewBalance,
+      note: `استرجاع فوري: فشل تنفيذ الطلب #${orderId} من المزود (${dispatchResult.failureReason || 'رفض المزود'})`,
+    });
 
     // Create Order Record with 'failed' status and rich diagnostic evidence for transparency
     await Order.create({
@@ -531,7 +590,6 @@ export const executePurchase = async ({
     costPrice: totalCost,
     userPrice: totalUserPrice,
     profit,
-    profitPercentage,
     profitPercentage: actualProfitPercentage,
     discountPercent,
     currency: effectiveCurrency,
@@ -566,29 +624,13 @@ export const executePurchase = async ({
     }).catch((err) => console.error('[Order Notification Error]:', err));
   }
 
-  // 9. Create Transaction Record (Successful Purchase)
-  const transaction = await Transaction.create({
-    userId: user._id,
-    type: 'purchase',
-    currency: user.currency || 'USD',
-    amount: totalUserPrice,
-    costPrice: totalCost,
-    profit,
-    productName: finalProductName,
-    targetId: targetId || '',
-    orderId,
-    previousBalance,
-    newBalance,
-    note: `شراء: ${finalProductName} (${targetId || 'رقم الحساب'})`,
-  });
-
-  // 10. Award Cashback Coins upon successful purchase
+  // 9. Award Cashback Coins upon successful purchase
   let coinsAwarded = 0;
   try {
     const isCashbackActive = settings.isCashbackActive !== false;
     const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
     const coinsPerDollar = Number(settings.coinsPerDollar) || 100;
-    const exchangeRate = getEffectiveExchangeRates(settings).sellRate;
+    const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
     if (isCashbackActive && cashbackPercentage > 0) {
       let spentInUsd = totalUserPrice;
@@ -1730,8 +1772,7 @@ export const handleRoyaWebhook = async (data = {}) => {
 export const getProfitReportsAdmin = async (query = {}) => {
   const period = query.period || 'monthly'; // 'weekly', 'monthly', 'yearly', 'all'
   const settings = await getSettings();
-  const rates = getEffectiveExchangeRates(settings);
-  const exchangeRate = rates.sellRate;
+  const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
 
   const now = new Date();
   let startDate;
@@ -2103,8 +2144,6 @@ export const getProfitReportsAdmin = async (query = {}) => {
     startDate: startDate.toISOString(),
     endDate: endDate.toISOString(),
     exchangeRate,
-    exchangeRateBuy: rates.buyRate,
-    exchangeRateSell: rates.sellRate,
     summary: {
       totalRevenueUsd,
       totalCostUsd,
