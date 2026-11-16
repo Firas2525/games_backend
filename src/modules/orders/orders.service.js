@@ -1198,13 +1198,18 @@ export const getAllOrdersAdmin = async (query = {}) => {
 
 };
 
-export const checkSingleOrder = async (orderId) => {
+export const checkSingleOrder = async (orderId, manualProviderOrderId = null) => {
   const order = await Order.findOne({
     $or: [{ orderId }, { _id: mongoose.isValidObjectId(orderId) ? orderId : null }],
   }).populate('userId', 'name email phone avatar balance currency userCode');
 
   if (!order) {
     throw new ApiError('الطلب غير موجود', HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (manualProviderOrderId && String(manualProviderOrderId).trim()) {
+    order.providerOrderId = String(manualProviderOrderId).trim();
+    await order.save();
   }
 
   if (order.status === 'failed') {
@@ -1223,12 +1228,37 @@ export const checkSingleOrder = async (orderId) => {
       order.providerVerification = probe.message;
       if (probe.found && probe.orderObj) {
         order.providerResponse = probe.orderObj;
+        const rawStatus = String(probe.orderObj.status || '').toLowerCase();
+        const isSuccessStatus = ['accept', 'completed', 'done', 'success'].includes(rawStatus);
+
+        if (isSuccessStatus) {
+          order.status = 'completed';
+          order.refunded = false;
+          order.failureReason = '';
+          order.completedAt = order.completedAt || new Date();
+          order.executionDurationSeconds = order.executionDurationSeconds || 5;
+          order.executionDurationText = order.executionDurationText || 'تنفيذ مباشر عبر المزود';
+
+          const targetUserId = order.userId?._id || order.userId;
+          if (targetUserId) {
+            sendDirectUserNotification(targetUserId, {
+              title: 'تم تنفيذ طلبك بنجاح! 🎮',
+              body: `تم تأكيد إكمال طلب شحن (${order.productName || 'طلب شحن'}) بنجاح من سيرفر المزود. شكراً لتعاملك معنا!`,
+              data: {
+                type: 'order_completed',
+                orderId: String(order.orderId || order._id),
+              },
+            }).catch((err) => console.error('[Probe Completion Push Error]:', err.message));
+          }
+        }
+
         await order.save();
+        clearAdminOrdersCache();
         return {
           order: enrichOrderWithInvoiceMeta(order),
           updated: true,
           status: order.status,
-          message: `تنبيه: الطلب مسجل لدى المزود بالفعل! (${probe.message})`,
+          message: `تم تأكيد وجود الطلب لدى المزود بنجاح! (${probe.message})`,
         };
       }
       await order.save();
@@ -1236,7 +1266,7 @@ export const checkSingleOrder = async (orderId) => {
         order: enrichOrderWithInvoiceMeta(order),
         updated: false,
         status: order.status,
-        message: probe.message || 'تم فحص سيرفر المزود: الطلب غير موجود لدى المزود إطلاقاً ومسترجع مسبقاً',
+        message: probe.message || 'تم فحص سيرفر المزود: الطلب غير موجود لدى المزود إطلاقاً',
       };
     } catch (probeErr) {
       return {

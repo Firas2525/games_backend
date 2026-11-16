@@ -293,19 +293,45 @@ export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = f
         '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
       const probeCtrl = new AbortController();
       const probeTimeout = setTimeout(() => probeCtrl.abort(), 6000);
-      const url = `https://api.brand-one-card.com/client/api/checkOrder/${orderUuid}`;
-      const res = await fetch(url, {
-        headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
-        signal: probeCtrl.signal,
-      });
-      clearTimeout(probeTimeout);
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.status === 'OK' && data?.data) {
-          return { found: true, orderObj: data.data, message: 'تم تأكيد تسجيل الطلب لدى براند كارد بنجاح' };
+      try {
+        const url = `https://api.brand-one-card.com/client/api/checkOrder/${orderUuid}`;
+        const res = await fetch(url, {
+          headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+          signal: probeCtrl.signal,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.status === 'OK' && data?.data) {
+            clearTimeout(probeTimeout);
+            return { found: true, orderObj: data.data, message: 'تم تأكيد تسجيل الطلب لدى براند كارد بنجاح' };
+          }
         }
-        return { found: false, message: 'تم فحص سيرفر براند كارد: لم يُسجل هذا الطلب لدى المزود ولم يُخصم أي مبلغ' };
+
+        // Secondary probe if orderUuid is a numeric provider order ID
+        if (orderUuid && /^\d+$/.test(String(orderUuid).trim())) {
+          const checkUrl = `https://api.brand-one-card.com/client/api/check?orders=[${orderUuid}]`;
+          const res2 = await fetch(checkUrl, {
+            headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
+            signal: probeCtrl.signal,
+          });
+          if (res2.ok) {
+            const data2 = await res2.json();
+            const list = Array.isArray(data2?.data) ? data2.data : [];
+            const item = list.find((o) => String(o.order_id) === String(orderUuid)) || list[0];
+            if (item) {
+              clearTimeout(probeTimeout);
+              return {
+                found: true,
+                orderObj: item,
+                message: `تم تأكيد تسجيل الطلب لدى براند كارد برقم #${item.order_id || orderUuid} (الحالة: ${item.status || 'مسجل'})`,
+              };
+            }
+          }
+        }
+      } finally {
+        clearTimeout(probeTimeout);
       }
+      return { found: false, message: 'تم فحص سيرفر براند كارد: لم يُسجل هذا الطلب لدى المزود' };
     }
   } catch (probeErr) {
     return { found: false, message: `تعذر التحقق التلقائي: ${probeErr.message}` };
