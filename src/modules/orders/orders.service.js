@@ -82,6 +82,16 @@ const generateShortOrderId = async () => {
   return code;
 };
 
+// High-precision in-memory order cooldown locks (prevents double-clicks & rapid consecutive purchases within 60s)
+const activeOrderLocks = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of activeOrderLocks.entries()) {
+    if (now >= exp) activeOrderLocks.delete(k);
+  }
+}, 15000);
+
 export const executePurchase = async ({
   userId,
   productId,
@@ -98,6 +108,36 @@ export const executePurchase = async ({
   amount,
   currency = '$',
 }) => {
+  // 0. Concurrency & Fast In-Memory 60s Cooldown Guard (Stops race condition double-taps immediately)
+  const nowMs = Date.now();
+  const userLockKey = `user_${userId}`;
+  const targetLockKey = targetId && String(targetId).trim().length > 0 ? `target_${String(targetId).trim()}` : null;
+
+  const userExp = activeOrderLocks.get(userLockKey);
+  if (userExp && userExp > nowMs) {
+    const remainingSec = Math.max(1, Math.ceil((userExp - nowMs) / 1000));
+    throw new ApiError(
+      `يرجى الانتظار (${remainingSec} ثانية) قبل إرسال طلب جديد لتفادي التكرار وحماية محفظتك ⏳.`,
+      HTTP_STATUS.TOO_MANY_REQUESTS || 429
+    );
+  }
+
+  if (targetLockKey) {
+    const targetExp = activeOrderLocks.get(targetLockKey);
+    if (targetExp && targetExp > nowMs) {
+      const remainingSec = Math.max(1, Math.ceil((targetExp - nowMs) / 1000));
+      throw new ApiError(
+        `لا يمكن تكرار الشحن لنفس المعرف/الآيدي (${targetId}) خلال نفس الدقيقة لتجنب رفض المزود. يرجى الانتظار (${remainingSec} ثانية) ⏳.`,
+        HTTP_STATUS.TOO_MANY_REQUESTS || 429
+      );
+    }
+  }
+
+  // Lock both immediately for 60 seconds
+  const lockExpiry = nowMs + 60 * 1000;
+  activeOrderLocks.set(userLockKey, lockExpiry);
+  if (targetLockKey) activeOrderLocks.set(targetLockKey, lockExpiry);
+
   const user = await User.findById(userId);
   if (!user) {
     throw new ApiError('المستخدم غير موجود', HTTP_STATUS.NOT_FOUND);
@@ -143,31 +183,24 @@ export const executePurchase = async ({
   // The authoritative provider source
   source = product?.source || packageProduct?.source || activeItem?.source || 'custom';
 
-  // 1.05 Anti-duplicate order check within 60 seconds (cooldown)
+  // 1.05 Anti-duplicate order check within 60 seconds (cooldown across DB)
   const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
   const targetProductId = product?._id || activeItem?._id || (mongoose.isValidObjectId(productId) ? productId : null);
+  const normalizedTargetId = targetId ? String(targetId).trim() : '';
 
-  const duplicateQuery = {
-    userId: user._id,
-    createdAt: { $gte: oneMinuteAgo },
-    status: { $in: ['pending', 'processing', 'completed'] },
-  };
-
-  if (targetProductId) {
-    duplicateQuery.$or = [
-      { productId: targetProductId },
-      ...(finalProductName ? [{ productName: finalProductName }] : []),
-    ];
-  } else if (finalProductName) {
-    duplicateQuery.productName = finalProductName;
+  const duplicateOr = [
+    { userId: user._id, createdAt: { $gte: oneMinuteAgo } },
+  ];
+  if (normalizedTargetId.length > 0) {
+    duplicateOr.push({ targetId: normalizedTargetId, createdAt: { $gte: oneMinuteAgo } });
   }
 
-  const recentOrder = await Order.findOne(duplicateQuery).sort({ createdAt: -1 }).lean();
+  const recentOrder = await Order.findOne({ $or: duplicateOr }).sort({ createdAt: -1 }).lean();
   if (recentOrder) {
     const elapsedSeconds = Math.floor((Date.now() - new Date(recentOrder.createdAt).getTime()) / 1000);
     const remainingSeconds = Math.max(1, 60 - elapsedSeconds);
     throw new ApiError(
-      `هناك طلب تم إرساله بالفعل لهذا المنتج وهو قيد المعالجة الآن ⏳. يرجى الانتظار (${remainingSeconds} ثانية) قبل إرسال طلب جديد لتفادي التكرار.`,
+      `هناك طلب تم إرساله بالفعل مؤخراً (${recentOrder.productName || 'طلب شحن'}). يرجى الانتظار (${remainingSeconds} ثانية) قبل إرسال طلب جديد لتفادي التكرار وحماية محفظتك ⏳.`,
       HTTP_STATUS.TOO_MANY_REQUESTS || 429
     );
   }
