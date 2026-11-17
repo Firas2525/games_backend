@@ -2630,6 +2630,9 @@ export const createCustomProduct = async (data) => {
     qtyValues = null,
     requiredFields = [],
     note = '',
+    isExchange = false,
+    exchangeUnitName = '',
+    unitsPerDollar = 1,
   } = data;
 
   if (!name || !name.trim()) {
@@ -2684,6 +2687,12 @@ export const createCustomProduct = async (data) => {
     resolvedCurrency = 'BOTH';
   }
 
+  const boolIsExchange = Boolean(isExchange);
+  const parsedUnitsPerDollar = Number(unitsPerDollar) > 0 ? Number(unitsPerDollar) : 1;
+  const unitPriceFromRate = boolIsExchange ? Number((1 / parsedUnitsPerDollar).toFixed(8)) : 0;
+  const resolvedCost = (cost <= 0 && boolIsExchange) ? unitPriceFromRate : cost;
+  const resolvedSellingPrice = (finalSellingPrice <= 0 && boolIsExchange) ? unitPriceFromRate : finalSellingPrice;
+
   const product = await Product.create({
     externalId,
     source: 'custom',
@@ -2692,9 +2701,9 @@ export const createCustomProduct = async (data) => {
     category: category.trim(),
     mainCategory: resolvedMainCat,
     isCategoryOverridden: true,
-    originalPrice: cost,
-    price: finalSellingPrice,
-    sellingPrice: finalSellingPrice,
+    originalPrice: resolvedCost,
+    price: resolvedSellingPrice,
+    sellingPrice: resolvedSellingPrice,
     currency: resolvedCurrency,
     image: image?.trim() || '',
     isAvailable: isAvailable !== false,
@@ -2704,6 +2713,9 @@ export const createCustomProduct = async (data) => {
     qtyValues: Array.isArray(qtyValues) && qtyValues.length > 0 ? qtyValues.map(Number) : null,
     requiredFields: formattedFields,
     note: note?.trim() || '',
+    isExchange: boolIsExchange,
+    exchangeUnitName: exchangeUnitName ? String(exchangeUnitName).trim() : '',
+    unitsPerDollar: parsedUnitsPerDollar,
   });
 
   serverCache.clearAll();
@@ -2734,6 +2746,9 @@ export const updateCustomProduct = async (id, data) => {
     qtyValues,
     requiredFields,
     note,
+    isExchange,
+    exchangeUnitName,
+    unitsPerDollar,
   } = data;
 
   if (name !== undefined) product.name = name.trim();
@@ -2773,6 +2788,9 @@ export const updateCustomProduct = async (id, data) => {
     }));
   }
   if (note !== undefined) product.note = note.trim();
+  if (isExchange !== undefined) product.isExchange = Boolean(isExchange);
+  if (exchangeUnitName !== undefined) product.exchangeUnitName = String(exchangeUnitName).trim();
+  if (unitsPerDollar !== undefined) product.unitsPerDollar = Number(unitsPerDollar) > 0 ? Number(unitsPerDollar) : 1;
 
   await product.save();
   serverCache.clearAll();

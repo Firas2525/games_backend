@@ -418,8 +418,25 @@ export const executePurchase = async ({
       );
     }
   }
-  const totalUserPrice = Number((resolvedUnitSellingPrice * validQuantity).toFixed(4));
-  const totalCost = Number((unitCost * validQuantity).toFixed(4));
+  let totalUserPrice = Number((resolvedUnitSellingPrice * validQuantity).toFixed(4));
+  let totalCost = Number((unitCost * validQuantity).toFixed(4));
+
+  // Exchange / Drain product (منتج تصريف)
+  const isExchangeProduct = Boolean(activeItem?.isExchange ?? product?.isExchange);
+  const unitsPerDollar = Number(activeItem?.unitsPerDollar ?? product?.unitsPerDollar) || 1;
+  const exchangeUnitName = (activeItem?.exchangeUnitName || product?.exchangeUnitName || 'وحدة').trim();
+
+  if (isExchangeProduct && unitsPerDollar > 0) {
+    const usdAmount = validQuantity / unitsPerDollar;
+    if (isUserSyp) {
+      totalUserPrice = Math.round(usdAmount * exchangeRate);
+      totalCost = Math.round(usdAmount * exchangeRate);
+    } else {
+      totalUserPrice = Number(usdAmount.toFixed(4));
+      totalCost = Number(usdAmount.toFixed(4));
+    }
+    finalProductName = `${finalProductName} (${validQuantity} ${exchangeUnitName})`;
+  }
   const profit = Number(Math.max(0, totalUserPrice - totalCost).toFixed(4));
   const actualProfitPercentage = totalCost > 0
     ? Number((((totalUserPrice - totalCost) / totalCost) * 100).toFixed(2))

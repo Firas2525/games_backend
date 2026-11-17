@@ -137,6 +137,19 @@ const productSchema = new mongoose.Schema(
       default: null,
     },
     requiredFields: [requiredFieldSchema],
+    isExchange: {
+      type: Boolean,
+      default: false,
+    },
+    exchangeUnitName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    unitsPerDollar: {
+      type: Number,
+      default: 1,
+    },
     rawPayload: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
