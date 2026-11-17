@@ -4,8 +4,14 @@ const apiLogSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ['INTERNAL_HTTP', 'PROVIDER_DISPATCH', 'SYSTEM'],
-      default: 'INTERNAL_HTTP',
+      enum: ['INTERNAL_HTTP', 'PROVIDER_DISPATCH', 'PROVIDER_CHECK', 'SYSTEM'],
+      default: 'PROVIDER_DISPATCH',
+      index: true,
+    },
+    operation: {
+      type: String,
+      enum: ['PURCHASE', 'CHECK', 'PROBE', 'OTHER'],
+      default: 'PURCHASE',
       index: true,
     },
     direction: {

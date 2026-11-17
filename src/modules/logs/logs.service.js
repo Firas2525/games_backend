@@ -17,13 +17,14 @@ export const getLogs = async (query = {}) => {
   const limit = Math.min(100, Math.max(1, parseInt(query.limit) || 30));
   const skip = (page - 1) * limit;
 
-  const filter = {};
+  // By default, strictly isolate to OUTGOING calls to external providers (Purchases, Checks, Probes)
+  const filter = {
+    direction: 'OUTGOING',
+    type: { $in: ['PROVIDER_DISPATCH', 'PROVIDER_CHECK'] },
+  };
 
-  if (query.type && query.type !== 'all') {
-    filter.type = query.type;
-  }
-  if (query.direction && query.direction !== 'all') {
-    filter.direction = query.direction;
+  if (query.operation && query.operation !== 'all') {
+    filter.operation = query.operation;
   }
   if (query.provider && query.provider !== 'all') {
     filter.provider = query.provider;
@@ -41,11 +42,15 @@ export const getLogs = async (query = {}) => {
       { productName: { $regex: s, $options: 'i' } },
       { provider: { $regex: s, $options: 'i' } },
       { errorMessage: { $regex: s, $options: 'i' } },
+      { 'requestBody.playerId': { $regex: s, $options: 'i' } },
+      { 'requestBody.Player_ID': { $regex: s, $options: 'i' } },
+      { 'requestBody.player_id': { $regex: s, $options: 'i' } },
+      { 'requestBody.order_uuid': { $regex: s, $options: 'i' } },
     ];
   }
 
   // Fast, light queries with strict timeouts
-  const [rawLogs, total, providerCount, errorCount] = await Promise.all([
+  const [rawLogs, total, errorCount] = await Promise.all([
     ApiLog.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -53,21 +58,20 @@ export const getLogs = async (query = {}) => {
       .maxTimeMS(6000)
       .lean(),
     ApiLog.countDocuments(filter).maxTimeMS(4000).catch(() => 0),
-    ApiLog.countDocuments({ type: 'PROVIDER_DISPATCH' }).maxTimeMS(4000).catch(() => 0),
-    ApiLog.countDocuments({ isSuccess: false }).maxTimeMS(4000).catch(() => 0),
+    ApiLog.countDocuments({ ...filter, isSuccess: false }).maxTimeMS(4000).catch(() => 0),
   ]);
 
-  // Sanitize and ensure no single log document exceeds 10KB
+  // Sanitize and ensure no single log document exceeds 15KB
   const logs = rawLogs.map((log) => {
     let res = log.responseBody;
     if (res && typeof res === 'object') {
       try {
         const s = JSON.stringify(res);
-        if (s.length > 8000) {
+        if (s.length > 12000) {
           res = {
             _truncated: true,
             summary: `رد مختصر (${Math.round(s.length / 1024)} KB)`,
-            preview: s.slice(0, 1500) + '...',
+            preview: s.slice(0, 3000) + '...',
           };
         }
       } catch (_) {}
@@ -80,8 +84,7 @@ export const getLogs = async (query = {}) => {
 
   const summary = {
     totalCount: total,
-    providerDispatches: providerCount,
-    internalHttp: Math.max(0, total - providerCount),
+    successCount: Math.max(0, total - errorCount),
     errors: errorCount,
   };
 
@@ -103,6 +106,29 @@ export const getLogDetails = async (id) => {
     throw new Error('Log entry not found');
   }
   return log;
+};
+
+export const deleteLogsBatch = async (ids = []) => {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { deletedCount: 0 };
+  }
+  const result = await ApiLog.deleteMany({ _id: { $in: ids } });
+  return { deletedCount: result.deletedCount };
+};
+
+export const deleteSingleLog = async (id) => {
+  const result = await ApiLog.findByIdAndDelete(id);
+  return { deletedCount: result ? 1 : 0 };
+};
+
+export const deleteAllProviderLogs = async () => {
+  const result = await ApiLog.deleteMany({
+    $or: [
+      { direction: 'OUTGOING' },
+      { type: { $in: ['PROVIDER_DISPATCH', 'PROVIDER_CHECK'] } },
+    ],
+  });
+  return { deletedCount: result.deletedCount };
 };
 
 export const clearOldLogs = async () => {

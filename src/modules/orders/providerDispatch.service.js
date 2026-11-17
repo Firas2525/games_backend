@@ -254,6 +254,7 @@ export function isProviderClearFailure(result, statusCode) {
  */
 export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = false }) => {
   if (!orderUuid) return { found: false, message: 'لا يوجد رقم طلب مرجعي للتحقق' };
+  const startTime = Date.now();
   try {
     if (source === 'roya_usd' || source === 'roya_syp' || source === 'sw_games') {
       const token = isSyp
@@ -267,8 +268,23 @@ export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = f
         signal: probeCtrl.signal,
       });
       clearTimeout(probeTimeout);
+      const durationMs = Date.now() - startTime;
       if (res.ok) {
         const data = await res.json();
+        ApiLog.create({
+          type: 'PROVIDER_CHECK',
+          direction: 'OUTGOING',
+          operation: 'PROBE',
+          method: 'GET',
+          endpoint: url,
+          provider: source,
+          orderId: orderUuid,
+          statusCode: res.status,
+          responseBody: data,
+          durationMs,
+          isSuccess: true,
+        }).catch(() => {});
+
         const list = Array.isArray(data?.data?.orders)
           ? data.data.orders
           : Array.isArray(data?.orders)
@@ -299,8 +315,24 @@ export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = f
           headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
           signal: probeCtrl.signal,
         });
+        const durationMs = Date.now() - startTime;
         if (res.ok) {
           const data = await res.json();
+          ApiLog.create({
+            type: 'PROVIDER_CHECK',
+            direction: 'OUTGOING',
+            operation: 'PROBE',
+            method: 'GET',
+            endpoint: url,
+            provider: source,
+            orderId: orderUuid,
+            statusCode: res.status,
+            responseBody: data,
+            durationMs,
+            isSuccess: data?.status === 'OK',
+            errorMessage: data?.status === 'ERROR' ? (data?.msg || 'Not found') : '',
+          }).catch(() => {});
+
           if (data?.status === 'OK' && data?.data) {
             clearTimeout(probeTimeout);
             return { found: true, orderObj: data.data, message: 'تم تأكيد تسجيل الطلب لدى براند كارد بنجاح' };
@@ -314,8 +346,23 @@ export const probeProviderOrderExistence = async ({ source, orderUuid, isSyp = f
             headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
             signal: probeCtrl.signal,
           });
+          const durationMs2 = Date.now() - startTime;
           if (res2.ok) {
             const data2 = await res2.json();
+            ApiLog.create({
+              type: 'PROVIDER_CHECK',
+              direction: 'OUTGOING',
+              operation: 'PROBE',
+              method: 'GET',
+              endpoint: checkUrl,
+              provider: source,
+              orderId: orderUuid,
+              statusCode: res2.status,
+              responseBody: data2,
+              durationMs: durationMs2,
+              isSuccess: data2?.status === 'OK',
+            }).catch(() => {});
+
             const list = Array.isArray(data2?.data) ? data2.data : [];
             const item = list.find((o) => String(o.order_id) === String(orderUuid)) || list[0];
             if (item) {
@@ -446,6 +493,7 @@ export const dispatchProviderOrder = async ({
 
     await ApiLog.create({
       type: 'PROVIDER_DISPATCH',
+      operation: 'PURCHASE',
       direction: 'OUTGOING',
       method: 'INTERNAL',
       endpoint: `[CUSTOM_FULFILLMENT]/${externalId || 'manual'}`,
@@ -646,6 +694,7 @@ export const dispatchProviderOrder = async ({
   // Record audit log for OUTGOING provider API call
   await ApiLog.create({
     type: 'PROVIDER_DISPATCH',
+    operation: 'PURCHASE',
     direction: 'OUTGOING',
     method,
     endpoint: targetUrl,
@@ -739,12 +788,29 @@ export const checkExternalOrderStatus = async (order) => {
 
       // Fallback to /checkorders endpoint
       const url = `https://sw-games.net/api/fastapi/checkorders?order_ids=${providerOrderId}`;
+      const checkStart = Date.now();
       const res = await fetch(url, {
         headers: { apiToken: token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
         signal: AbortSignal.timeout(5000),
       });
+      const durationMs = Date.now() - checkStart;
       if (res.ok) {
         const data = await res.json();
+        ApiLog.create({
+          type: 'PROVIDER_CHECK',
+          operation: 'CHECK',
+          direction: 'OUTGOING',
+          method: 'GET',
+          endpoint: url,
+          provider: source,
+          orderId: order.orderId || providerOrderId,
+          productName: order.productName || '',
+          statusCode: res.status,
+          responseBody: data,
+          durationMs,
+          isSuccess: true,
+        }).catch(() => {});
+
         const ordersList = Array.isArray(data?.data?.orders)
           ? data.data.orders
           : Array.isArray(data?.orders)
@@ -788,12 +854,30 @@ export const checkExternalOrderStatus = async (order) => {
         process.env.BRAND1CARD_API_TOKEN ||
         '3cf13f069cf8786bc75ed75794641e9cf34e467f6fe6ed892a9ff227941ea0b8';
       const url = `https://api.brand-one-card.com/client/api/check?orders=[${providerOrderId}]`;
+      const checkStart = Date.now();
       const res = await fetch(url, {
         headers: { 'api-token': token, Accept: 'application/json', 'User-Agent': BROWSER_USER_AGENT },
         signal: AbortSignal.timeout(5000),
       });
+      const durationMs = Date.now() - checkStart;
       if (res.ok) {
         const data = await res.json();
+        ApiLog.create({
+          type: 'PROVIDER_CHECK',
+          operation: 'CHECK',
+          direction: 'OUTGOING',
+          method: 'GET',
+          endpoint: url,
+          provider: source,
+          orderId: order.orderId || providerOrderId,
+          productName: order.productName || '',
+          statusCode: res.status,
+          responseBody: data,
+          durationMs,
+          isSuccess: data?.status === 'OK',
+          errorMessage: data?.status === 'ERROR' ? (data?.msg || 'Error') : '',
+        }).catch(() => {});
+
         const list = Array.isArray(data?.data) ? data.data : [];
         const item = list.find((o) => String(o.order_id) === String(providerOrderId)) || list[0];
         if (item) {
