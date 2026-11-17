@@ -9,7 +9,7 @@ import { ApiLog } from './apiLog.model.js';
         { endpoint: { $regex: '/products' } },
       ],
     });
-  } catch (_) {}
+  } catch (_) { }
 })();
 
 export const getLogs = async (query = {}) => {
@@ -74,7 +74,7 @@ export const getLogs = async (query = {}) => {
             preview: s.slice(0, 3000) + '...',
           };
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     return {
       ...log,

@@ -827,12 +827,14 @@ export const syncOrdersBatch = async (ordersList) => {
               updatedCount++;
             } else if (res.status === 'completed' && order.status !== 'completed') {
               order.status = 'completed';
+              order.refunded = false;
               if (res.rawData) order.providerResponse = res.rawData;
               if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
               const meta = resolveOrderCompletionMeta(order, res.rawData);
               order.completedAt = meta.completedAt;
               order.executionDurationSeconds = meta.executionDurationSeconds;
               order.executionDurationText = meta.executionDurationText;
+              await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
               await order.save();
               sendDirectUserNotification(order.userId, {
                 title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -863,12 +865,14 @@ export const syncOrdersBatch = async (ordersList) => {
               updatedCount++;
             } else if (res.status === 'completed' && order.status !== 'completed') {
               order.status = 'completed';
+              order.refunded = false;
               if (res.rawData) order.providerResponse = res.rawData;
               if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
               const meta = resolveOrderCompletionMeta(order, res.rawData);
               order.completedAt = meta.completedAt;
               order.executionDurationSeconds = meta.executionDurationSeconds;
               order.executionDurationText = meta.executionDurationText;
+              await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
               await order.save();
               sendDirectUserNotification(order.userId, {
                 title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -897,11 +901,13 @@ export const syncOrdersBatch = async (ordersList) => {
             updatedCount++;
           } else if (checkResult.status === 'completed') {
             order.status = 'completed';
+            order.refunded = false;
             if (checkResult.rawData) order.providerResponse = checkResult.rawData;
             const meta = resolveOrderCompletionMeta(order, checkResult.rawData);
             order.completedAt = meta.completedAt;
             order.executionDurationSeconds = meta.executionDurationSeconds;
             order.executionDurationText = meta.executionDurationText;
+            await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
             await order.save();
             sendDirectUserNotification(order.userId, {
               title: 'تم تنفيذ طلبك بنجاح! 🎮',
@@ -1231,6 +1237,88 @@ export const getAllOrdersAdmin = async (query = {}) => {
 
 };
 
+export const ensureOrderHasPurchaseTransaction = async (order, { deductBalanceIfRefunded = true } = {}) => {
+  if (!order || !order.orderId) return null;
+
+  const orderIdStr = String(order.orderId);
+  const targetUserId = order.userId?._id || order.userId;
+  if (!targetUserId) return null;
+
+  try {
+    // 1. Check if a purchase transaction already exists
+    const existingPurchaseTx = await Transaction.findOne({
+      $or: [{ orderId: orderIdStr }, { orderId: Number(orderIdStr) || 0 }],
+      type: 'purchase',
+    });
+
+    if (existingPurchaseTx) {
+      return existingPurchaseTx;
+    }
+
+    // 2. Check if a refund transaction exists
+    const existingRefundTx = await Transaction.findOne({
+      $or: [{ orderId: orderIdStr }, { orderId: Number(orderIdStr) || 0 }],
+      type: 'refund',
+    });
+
+    const wasRefunded = order.refunded === true || Boolean(existingRefundTx);
+
+    const user = await User.findById(targetUserId);
+    if (!user) return null;
+
+    const totalUserPrice = Number(order.userPrice) || 0;
+    const totalCost = Number(order.costPrice) || 0;
+    const profit = Number(order.profit) || 0;
+    const currency = order.currency || user.currency || 'USD';
+
+    let prevBal = user.balance;
+    let newBal = user.balance;
+
+    if (wasRefunded && deductBalanceIfRefunded && totalUserPrice > 0) {
+      // Re-deduct user balance since order was confirmed completed by provider
+      const updatedUser = await User.findByIdAndUpdate(
+        targetUserId,
+        {
+          $inc: {
+            balance: -totalUserPrice,
+            totalSpent: totalUserPrice,
+            totalProfit: profit,
+          },
+        },
+        { new: true }
+      );
+      if (updatedUser) {
+        newBal = updatedUser.balance;
+        prevBal = Number((updatedUser.balance + totalUserPrice).toFixed(4));
+      }
+    } else {
+      prevBal = Number((user.balance + totalUserPrice).toFixed(4));
+      newBal = user.balance;
+    }
+
+    const tx = await Transaction.create({
+      userId: targetUserId,
+      type: 'purchase',
+      currency,
+      amount: totalUserPrice,
+      costPrice: totalCost,
+      profit,
+      productName: order.productName || 'طلب شحن',
+      targetId: order.targetId || '',
+      orderId: orderIdStr,
+      previousBalance: prevBal,
+      newBalance: newBal,
+      note: `شراء: ${order.productName || 'طلب شحن'} (${order.targetId || 'رقم الحساب'})`,
+      createdAt: order.completedAt || order.createdAt || new Date(),
+    });
+
+    return tx;
+  } catch (err) {
+    console.error('[ensureOrderHasPurchaseTransaction Error]:', err.message);
+    return null;
+  }
+};
+
 export const checkSingleOrder = async (orderId, manualProviderOrderId = null) => {
   const order = await Order.findOne({
     $or: [{ orderId }, { _id: mongoose.isValidObjectId(orderId) ? orderId : null }],
@@ -1271,6 +1359,9 @@ export const checkSingleOrder = async (orderId, manualProviderOrderId = null) =>
           order.completedAt = order.completedAt || new Date();
           order.executionDurationSeconds = order.executionDurationSeconds || 5;
           order.executionDurationText = order.executionDurationText || 'تنفيذ مباشر عبر المزود';
+
+          // Guarantee user balance debit and purchase transaction in ledger
+          await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
 
           const targetUserId = order.userId?._id || order.userId;
           if (targetUserId) {
@@ -1330,12 +1421,14 @@ export const checkSingleOrder = async (orderId, manualProviderOrderId = null) =>
           if (res.providerOrderNumber) order.providerOrderId = res.providerOrderNumber;
           if (order.status !== 'completed' || !order.executionDurationSeconds) {
             order.status = 'completed';
+            order.refunded = false;
             const meta = resolveOrderCompletionMeta(order, res.rawData);
             order.completedAt = meta.completedAt;
             order.executionDurationSeconds = meta.executionDurationSeconds;
             order.executionDurationText = meta.executionDurationText;
             updated = true;
           }
+          await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
           await order.save();
         }
       }
@@ -1353,12 +1446,14 @@ export const checkSingleOrder = async (orderId, manualProviderOrderId = null) =>
           if (checkResult.rawData) order.providerResponse = checkResult.rawData;
           if (order.status !== 'completed' || !order.executionDurationSeconds) {
             order.status = 'completed';
+            order.refunded = false;
             const meta = resolveOrderCompletionMeta(order, checkResult.rawData);
             order.completedAt = meta.completedAt;
             order.executionDurationSeconds = meta.executionDurationSeconds;
             order.executionDurationText = meta.executionDurationText;
             updated = true;
           }
+          await ensureOrderHasPurchaseTransaction(order, { deductBalanceIfRefunded: true });
           await order.save();
         }
       }

@@ -210,6 +210,75 @@ export const deductBalance = async ({ userId, amount, note = '', adminId }) => {
 };
 
 export const getUserTransactions = async (userId) => {
+  try {
+    // Auto-heal: Ensure all completed orders for this user have a corresponding transaction in the ledger
+    const completedOrders = await Order.find({
+      userId,
+      status: 'completed',
+    }).lean();
+
+    if (completedOrders.length > 0) {
+      const orderIds = completedOrders.map((o) => String(o.orderId));
+      const existingTxs = await Transaction.find({
+        userId,
+        type: 'purchase',
+        orderId: { $in: orderIds },
+      }).select('orderId').lean();
+
+      const existingSet = new Set(existingTxs.map((t) => String(t.orderId)));
+
+      for (const ord of completedOrders) {
+        const oId = String(ord.orderId);
+        if (!existingSet.has(oId)) {
+          const refundTx = await Transaction.findOne({
+            userId,
+            type: 'refund',
+            orderId: oId,
+          });
+
+          const user = await User.findById(userId);
+          if (user) {
+            const amount = Number(ord.userPrice) || 0;
+            // If the order was refunded by mistake when it originally failed, re-deduct balance now that it's completed
+            if (refundTx || ord.refunded) {
+              await User.findByIdAndUpdate(
+                userId,
+                {
+                  $inc: {
+                    balance: -amount,
+                    totalSpent: amount,
+                    totalProfit: Number(ord.profit) || 0,
+                  },
+                },
+                { new: true }
+              );
+              await Order.findByIdAndUpdate(ord._id, { refunded: false });
+            }
+
+            await Transaction.create({
+              userId,
+              type: 'purchase',
+              currency: ord.currency || user.currency || 'USD',
+              amount,
+              costPrice: Number(ord.costPrice) || 0,
+              profit: Number(ord.profit) || 0,
+              productName: ord.productName || 'طلب شحن',
+              targetId: ord.targetId || '',
+              orderId: oId,
+              previousBalance: Number((user.balance + amount).toFixed(4)),
+              newBalance: user.balance,
+              note: `شراء: ${ord.productName || 'طلب شحن'} (${ord.targetId || 'رقم الحساب'})`,
+              createdAt: ord.completedAt || ord.createdAt || new Date(),
+            });
+            existingSet.add(oId);
+          }
+        }
+      }
+    }
+  } catch (healErr) {
+    console.error('[getUserTransactions auto-heal error]:', healErr.message);
+  }
+
   return await Transaction.find({ userId, type: { $ne: 'deposit_request' } })
     .populate('adminId', 'name email')
     .sort({ createdAt: -1 })
