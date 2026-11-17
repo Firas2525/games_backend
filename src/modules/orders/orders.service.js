@@ -10,6 +10,7 @@ import { ApiError } from '../../utils/apiError.js';
 import { HTTP_STATUS } from '../../constants/httpStatusCodes.js';
 import { sendAdminNotification, sendDirectUserNotification } from '../../config/firebaseAdmin.js';
 import { formatGmt3String } from '../../utils/time.js';
+import { ApiLog } from '../logs/apiLog.model.js';
 import {
   dispatchProviderOrder,
   checkExternalOrderStatus,
@@ -20,6 +21,7 @@ import {
   formatDurationArabic,
   resolveOrderCompletionMeta,
   probeProviderOrderExistence,
+  extractProviderOrderId,
 } from './providerDispatch.service.js';
 
 export const enrichOrderWithInvoiceMeta = (rawOrder) => {
@@ -137,6 +139,8 @@ export const executePurchase = async ({
   const lockExpiry = nowMs + 60 * 1000;
   activeOrderLocks.set(userLockKey, lockExpiry);
   if (targetLockKey) activeOrderLocks.set(targetLockKey, lockExpiry);
+
+  const startTime = Date.now();
 
   const user = await User.findById(userId);
   if (!user) {
@@ -619,38 +623,66 @@ export const executePurchase = async ({
   }
 
   // 8. Create Order Record with full execution details (Successful / Processing Order)
+  let order;
   const initialStatus = dispatchResult.status || 'processing';
   const isImmediatelyCompleted = initialStatus === 'completed';
   const purchaseSec = isImmediatelyCompleted
-    ? Math.max(1, Math.round((Date.now() - startTime) / 1000))
+    ? Math.max(1, Math.round((Date.now() - (typeof startTime !== 'undefined' ? startTime : Date.now())) / 1000))
     : null;
   const purchaseText = purchaseSec ? formatDurationArabic(purchaseSec) : '';
 
-  const order = await Order.create({
-    orderId,
-    userId: user._id,
-    productId: activeItem?._id || product?._id || null,
-    productName: finalProductName,
-    category: finalCategory,
-    image: finalImage,
-    targetId: targetId || '',
-    extraFields,
-    quantity: validQuantity,
-    source,
-    costPrice: totalCost,
-    userPrice: totalUserPrice,
-    profit,
-    profitPercentage: actualProfitPercentage,
-    discountPercent,
-    currency: effectiveCurrency,
-    status: initialStatus,
-    completedAt: isImmediatelyCompleted ? new Date() : null,
-    executionDurationSeconds: purchaseSec,
-    executionDurationText: purchaseText,
-    providerOrderId: dispatchResult.providerOrderId || '',
-    providerPayload: dispatchResult.providerPayload || basePayload,
-    providerResponse: dispatchResult.providerResponse || null,
-  });
+  try {
+    order = await Order.create({
+      orderId,
+      userId: user._id,
+      productId: activeItem?._id || product?._id || null,
+      productName: finalProductName,
+      category: finalCategory,
+      image: finalImage,
+      targetId: targetId || '',
+      extraFields,
+      quantity: validQuantity,
+      source,
+      costPrice: totalCost,
+      userPrice: totalUserPrice,
+      profit,
+      profitPercentage: actualProfitPercentage,
+      discountPercent,
+      currency: effectiveCurrency,
+      status: initialStatus,
+      completedAt: isImmediatelyCompleted ? new Date() : null,
+      executionDurationSeconds: purchaseSec,
+      executionDurationText: purchaseText,
+      providerOrderId: dispatchResult.providerOrderId || '',
+      providerPayload: dispatchResult.providerPayload || basePayload,
+      providerResponse: dispatchResult.providerResponse || null,
+    });
+  } catch (orderCreateErr) {
+    console.error('[CRITICAL ORDER CREATE ERROR]: Failed to persist full order after dispatch:', orderCreateErr);
+    // Emergency rescue: create order with minimal valid schema to ensure order is NEVER lost
+    try {
+      order = await Order.create({
+        orderId,
+        userId: user._id,
+        productName: finalProductName || 'طلب شراء ألعاب',
+        category: finalCategory || 'ألعاب',
+        targetId: targetId || '',
+        quantity: validQuantity || 1,
+        source: source || 'custom',
+        costPrice: totalCost || 0,
+        userPrice: totalUserPrice || 0,
+        profit: profit || 0,
+        currency: effectiveCurrency || '$',
+        status: initialStatus,
+        completedAt: isImmediatelyCompleted ? new Date() : null,
+        providerOrderId: dispatchResult.providerOrderId || '',
+        providerPayload: dispatchResult.providerPayload || basePayload,
+        providerResponse: dispatchResult.providerResponse || null,
+      });
+    } catch (rescueErr) {
+      console.error('[FATAL ORDER RESCUE ERROR]:', rescueErr);
+    }
+  }
 
   // Notify Admin if order is from custom provider or pending manual processing
   const shouldNotifyAdmin =
@@ -2377,12 +2409,104 @@ export const getProfitReportsAdmin = async (query = {}) => {
 let isBackgroundSyncRunning = false;
 
 /**
+ * Automatically repairs any orphaned provider orders where user balance was deducted and provider order dispatched,
+ * but the Order document creation failed (e.g. due to server runtime error).
+ * Restores the order to 'completed' / 'processing' and awards cashback coins to user.
+ */
+export const repairOrphanedProviderOrders = async () => {
+  try {
+    const recentLogs = await ApiLog.find({
+      type: 'PROVIDER_DISPATCH',
+      operation: 'PURCHASE',
+      direction: 'OUTGOING',
+      isSuccess: true,
+      orderId: { $exists: true, $ne: '' },
+      createdAt: { $gte: new Date(Date.now() - 72 * 60 * 60 * 1000) },
+    }).sort({ createdAt: -1 }).limit(100);
+
+    for (const log of recentLogs) {
+      const orderId = String(log.orderId).trim();
+      if (!orderId) continue;
+
+      const existingOrder = await Order.findOne({ orderId });
+      if (existingOrder) continue;
+
+      console.log(`🛠️ [Auto-Repair]: Found orphaned provider dispatch for Order #${orderId}. Recovering...`);
+
+      const tx = await Transaction.findOne({ orderId, type: 'purchase' });
+      const user = await User.findById(log.userId);
+      if (!user) continue;
+
+      const resp = log.responseBody || {};
+      const providerOrderId = extractProviderOrderId(resp) || log.orderId;
+      const userPrice = tx?.amount || Number(resp?.data?.price) || 0;
+      const costPrice = tx?.costPrice || Number(resp?.data?.price) || userPrice;
+      const profit = tx?.profit || Math.max(0, userPrice - costPrice);
+
+      const newOrder = await Order.create({
+        orderId,
+        userId: user._id,
+        productName: log.productName || tx?.productName || 'طلب شحن ألعاب',
+        category: 'ألعاب',
+        targetId: tx?.targetId || resp?.data?.data?.playerId || resp?.data?.playerId || '',
+        quantity: log.requestBody?.qty || 1,
+        source: log.provider || 'brand1card',
+        costPrice,
+        userPrice,
+        profit,
+        currency: tx?.currency || user.currency || '$',
+        status: 'completed',
+        completedAt: log.createdAt || new Date(),
+        executionDurationSeconds: Math.round((log.durationMs || 2500) / 1000),
+        executionDurationText: formatDurationArabic(Math.round((log.durationMs || 2500) / 1000)),
+        providerOrderId: String(providerOrderId),
+        providerPayload: { targetUrl: log.endpoint, params: log.requestBody },
+        providerResponse: resp,
+      });
+
+      console.log(`✅ [Auto-Repair]: Successfully restored Order #${orderId} as completed in DB!`);
+
+      // Award cashback coins if not awarded yet
+      try {
+        const settings = await getSettings();
+        const cashbackPercentage = Number(settings.cashbackPercentage) || 0;
+        if (settings.isCashbackActive !== false && cashbackPercentage > 0) {
+          const exchangeRate = Number(settings.exchangeRateUsdToSyp) || 15000;
+          let spentInUsd = userPrice;
+          if (user.currency === 'SYP' || user.currency === 'ل.س') {
+            spentInUsd = userPrice / exchangeRate;
+          }
+          const rawCoins = spentInUsd * (cashbackPercentage / 100);
+          const coinsAwarded = Number((Math.round(rawCoins * 10) / 10).toFixed(1));
+          if (coinsAwarded > 0) {
+            user.coins = Number(((user.coins || 0) + coinsAwarded).toFixed(1));
+            await user.save();
+            newOrder.coinsEarned = coinsAwarded;
+            await newOrder.save();
+            console.log(`🎁 [Auto-Repair]: Awarded ${coinsAwarded} cashback coins to user ${user.email} for restored order #${orderId}`);
+          }
+        }
+      } catch (coinErr) {
+        console.error('[Auto-Repair Cashback Error]:', coinErr);
+      }
+    }
+  } catch (err) {
+    console.error('[Auto-Repair Orphaned Orders Error]:', err);
+  }
+};
+
+/**
  * Periodically polls external providers for pending/processing orders.
  * Runs every 60 seconds with strict concurrency control and small batches (15 items)
  * to maintain high performance and avoid event loop or network socket starvation.
  */
 export const startBackgroundOrderSyncWorker = () => {
   console.log('🔄 [OrderSyncWorker] Started automatic background order sync (every 60s)');
+  // Run repair on startup
+  setTimeout(() => {
+    repairOrphanedProviderOrders().catch((e) => console.error('[Startup Order Repair Warning]:', e.message));
+  }, 5000);
+
   setInterval(async () => {
     if (isBackgroundSyncRunning) return;
     try {
