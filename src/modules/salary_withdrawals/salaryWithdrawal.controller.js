@@ -86,11 +86,11 @@ export const submitSalaryWithdrawal = async (req, res) => {
     const requestId = `SAL-${Date.now().toString().slice(-4)}${randomHex}`;
 
     let grossDollars = 0;
-    if (service.withdrawalType === 'dollars') {
+    const cUnit = Math.max(0.0001, Number(service.coinsPerUnit) || 1);
+    const dUnit = Math.max(0.0001, Number(service.dollarsPerUnit) || 1.0);
+    if (service.withdrawalType === 'dollars' && !service.coinsPerUnit) {
       grossDollars = Number(qty.toFixed(4));
     } else {
-      const cUnit = Math.max(1, Number(service.coinsPerUnit) || 1000);
-      const dUnit = Math.max(0.0001, Number(service.dollarsPerUnit) || 1.0);
       grossDollars = Number(((qty / cUnit) * dUnit).toFixed(4));
     }
 
@@ -217,8 +217,7 @@ export const createSalaryService = async (req, res) => {
       ? requiredFields.map((f) => String(f).trim()).filter(Boolean)
       : [];
 
-    const isCoins = (withdrawalType || 'coins') === 'coins';
-    const finalUnitName = unitName && unitName.trim() ? unitName.trim() : (isCoins ? 'كوينز' : 'دولار');
+    const finalUnitName = unitName && unitName.trim() ? unitName.trim() : 'كوينز';
     const finalFee = Math.max(0, Math.min(100, Number(feePercentage) || 0));
 
     const newService = await SalaryService.create({
@@ -230,8 +229,8 @@ export const createSalaryService = async (req, res) => {
       maxQuantity: maxQuantity !== undefined ? Number(maxQuantity) : 10000,
       unitName: finalUnitName,
       adminReceiverId: adminReceiverId ? String(adminReceiverId).trim() : '',
-      withdrawalType: isCoins ? 'coins' : 'dollars',
-      coinsPerUnit: Math.max(1, Number(coinsPerUnit) || 1000),
+      withdrawalType: 'coins',
+      coinsPerUnit: Math.max(0.0001, Number(coinsPerUnit) || 1000),
       dollarsPerUnit: Math.max(0.0001, Number(dollarsPerUnit) || 1.0),
       feePercentage: finalFee,
       isActive: isActive !== undefined ? Boolean(isActive) : true,
@@ -282,8 +281,8 @@ export const updateSalaryService = async (req, res) => {
     if (maxQuantity !== undefined) service.maxQuantity = Number(maxQuantity);
     if (unitName !== undefined) service.unitName = unitName.trim();
     if (adminReceiverId !== undefined) service.adminReceiverId = String(adminReceiverId).trim();
-    if (withdrawalType !== undefined) service.withdrawalType = withdrawalType === 'dollars' ? 'dollars' : 'coins';
-    if (coinsPerUnit !== undefined) service.coinsPerUnit = Math.max(1, Number(coinsPerUnit) || 1000);
+    service.withdrawalType = 'coins';
+    if (coinsPerUnit !== undefined) service.coinsPerUnit = Math.max(0.0001, Number(coinsPerUnit) || 1000);
     if (dollarsPerUnit !== undefined) service.dollarsPerUnit = Math.max(0.0001, Number(dollarsPerUnit) || 1.0);
     if (feePercentage !== undefined) service.feePercentage = Math.max(0, Math.min(100, Number(feePercentage) || 0));
     if (isActive !== undefined) service.isActive = Boolean(isActive);

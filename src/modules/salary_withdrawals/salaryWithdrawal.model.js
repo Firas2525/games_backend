@@ -54,12 +54,18 @@ const salaryServiceSchema = new mongoose.Schema(
     coinsPerUnit: {
       type: Number,
       default: 1000,
-      min: [1, 'كمية الكوينزات يجب أن تكون 1 على الأقل'],
+      min: [0.0001, 'كمية الكوينزات يجب أن تكون أكبر من الصفر'],
     },
     dollarsPerUnit: {
       type: Number,
       default: 1.0,
       min: [0.0001, 'قيمة الدولار يجب أن تكون أكبر من الصفر'],
+    },
+    feePercentage: {
+      type: Number,
+      default: 0,
+      min: [0, 'نسبة العمولة لا يمكن أن تكون سالبة'],
+      max: [100, 'نسبة العمولة لا يمكن أن تتجاوز 100%'],
     },
     isActive: {
       type: Boolean,
@@ -130,6 +136,11 @@ const salaryWithdrawalRequestSchema = new mongoose.Schema(
       required: [true, 'الكمية مطلوبة'],
       min: [1, 'الكمية يجب أن تكون 1 على الأقل'],
     },
+    unitName: {
+      type: String,
+      default: 'كوينز',
+      trim: true,
+    },
     adminReceiverId: {
       type: String,
       default: '',
@@ -147,6 +158,26 @@ const salaryWithdrawalRequestSchema = new mongoose.Schema(
     dollarsPerUnit: {
       type: Number,
       default: 1.0,
+    },
+    feePercentage: {
+      type: Number,
+      default: 0,
+    },
+    grossDollars: {
+      type: Number,
+      default: 0,
+    },
+    feeDollars: {
+      type: Number,
+      default: 0,
+    },
+    netDollars: {
+      type: Number,
+      default: 0,
+    },
+    exchangeRate: {
+      type: Number,
+      default: 1,
     },
     calculatedDollars: {
       type: Number,
