@@ -185,6 +185,7 @@ export const createDepositRequest = async ({
   methodKey,
   amount,
   operationNumber,
+  fieldsData,
   note = '',
   receiptImage = '',
 }) => {
@@ -201,15 +202,45 @@ export const createDepositRequest = async ({
     throw new ApiError('يرجى إدخال مبلغ صحيح أكبر من الصفر', HTTP_STATUS.BAD_REQUEST);
   }
 
-  const cleanOperation = String(operationNumber || '').trim();
-  if (!cleanOperation) {
-    throw new ApiError('يرجى إدخال رقم العملية / رقم الإشعار للتحقق من الإيداع', HTTP_STATUS.BAD_REQUEST);
-  }
-
   await ensureDefaultMethods();
   const method = await DepositMethod.findOne({ key: methodKey, isEnabled: true });
   if (!method) {
     throw new ApiError('طريقة الإيداع غير متاحة حالياً', HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Validate custom required fields if specified by admin
+  const submittedFields = fieldsData && typeof fieldsData === 'object' ? fieldsData : {};
+  const methodRequiredFields = Array.isArray(method.requiredFields) && method.requiredFields.length > 0
+    ? method.requiredFields
+    : [];
+
+  if (methodRequiredFields.length > 0) {
+    for (const fieldName of methodRequiredFields) {
+      let val = submittedFields[fieldName];
+      if ((val === undefined || String(val).trim() === '') && (fieldName.includes('عملية') || fieldName.includes('إشعار'))) {
+        val = operationNumber;
+        submittedFields[fieldName] = operationNumber;
+      }
+      if (val === undefined || String(val).trim() === '') {
+        throw new ApiError(`الحقل مطلوب: ${fieldName}`, HTTP_STATUS.BAD_REQUEST);
+      }
+    }
+  }
+
+  let cleanOperation = String(operationNumber || '').trim();
+  if (!cleanOperation) {
+    for (const [k, v] of Object.entries(submittedFields)) {
+      if (k.includes('عملية') || k.includes('إشعار') || k.includes('رقم') || k.includes('معرف')) {
+        cleanOperation = String(v).trim();
+        break;
+      }
+    }
+    if (!cleanOperation && Object.values(submittedFields).length > 0) {
+      cleanOperation = String(Object.values(submittedFields)[0]).trim();
+    }
+    if (!cleanOperation) {
+      cleanOperation = `OP-${Date.now().toString().slice(-6)}`;
+    }
   }
 
   // Currency compatibility check:
@@ -355,6 +386,7 @@ export const createDepositRequest = async ({
     creditCurrency,
     exchangeRate: appliedRate,
     operationNumber: cleanOperation,
+    fieldsData: submittedFields,
     note: String(note || '').trim(),
     receiptImage: String(receiptImage || '').trim(),
     status: 'pending',
@@ -617,9 +649,14 @@ export const createDepositMethod = async (data) => {
   }
 
   const isCustom = data.currencyType === 'OTHER' || data.isCustomCurrency === true;
+  const cleanFields = Array.isArray(data.requiredFields)
+    ? data.requiredFields.map((f) => String(f).trim()).filter(Boolean)
+    : ['رقم العملية / إشعار التحويل'];
+
   const method = await DepositMethod.create({
     ...data,
     key,
+    requiredFields: cleanFields,
     currencyType: isCustom ? 'OTHER' : (data.currency === 'SYP' ? 'SYP' : 'USD'),
     isCustomCurrency: isCustom,
     currencyUnit: String(data.currencyUnit || '').trim(),
@@ -633,8 +670,13 @@ export const createDepositMethod = async (data) => {
  */
 export const updateDepositMethod = async (id, data) => {
   const isCustom = data.currencyType === 'OTHER' || data.isCustomCurrency === true;
+  const cleanFields = Array.isArray(data.requiredFields)
+    ? data.requiredFields.map((f) => String(f).trim()).filter(Boolean)
+    : undefined;
+
   const updatePayload = {
     ...data,
+    ...(cleanFields !== undefined ? { requiredFields: cleanFields } : {}),
     ...(data.currencyType ? {
       currencyType: isCustom ? 'OTHER' : (data.currency === 'SYP' ? 'SYP' : 'USD'),
       isCustomCurrency: isCustom,

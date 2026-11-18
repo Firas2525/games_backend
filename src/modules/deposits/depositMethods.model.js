@@ -107,6 +107,12 @@ const depositMethodSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    requiredFields: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
     order: {
       type: Number,
       default: 0,

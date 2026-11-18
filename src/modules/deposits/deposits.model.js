@@ -94,9 +94,14 @@ const depositSchema = new mongoose.Schema(
     },
     operationNumber: {
       type: String,
-      required: true,
+      default: '',
       trim: true,
       index: true,
+    },
+    fieldsData: {
+      type: Map,
+      of: String,
+      default: {},
     },
     note: {
       type: String,
