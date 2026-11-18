@@ -2693,13 +2693,38 @@ export const createCustomProduct = async (data) => {
   const resolvedCost = (cost <= 0 && boolIsExchange) ? unitPriceFromRate : cost;
   const resolvedSellingPrice = (finalSellingPrice <= 0 && boolIsExchange) ? unitPriceFromRate : finalSellingPrice;
 
+  const trimmedCategory = category.trim();
+  const trimmedMainCat = resolvedMainCat;
+
+  // Auto-create SubCategory / Subfolder if not already existing
+  let targetSub = await SubCategory.findOne({
+    name: { $regex: new RegExp(`^${trimmedCategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+    mainCategory: trimmedMainCat,
+  });
+
+  if (!targetSub) {
+    targetSub = await SubCategory.create({
+      name: trimmedCategory,
+      mainCategory: trimmedMainCat,
+      imageUrl: image?.trim() || '',
+      isVisible: true,
+      sortOrder: 0,
+    });
+  } else if (!targetSub.imageUrl && image?.trim()) {
+    targetSub.imageUrl = image.trim();
+    await targetSub.save();
+  }
+
   const product = await Product.create({
     externalId,
     source: 'custom',
     sourceName: 'مزودي الخاص',
     name: name.trim(),
-    category: category.trim(),
-    mainCategory: resolvedMainCat,
+    category: targetSub.name,
+    mainCategory: trimmedMainCat,
+    subCategoryId: targetSub._id,
+    subCategoryName: targetSub.name,
+    subCategoryImage: targetSub.imageUrl || image?.trim() || '',
     isCategoryOverridden: true,
     originalPrice: resolvedCost,
     price: resolvedSellingPrice,
@@ -2754,6 +2779,32 @@ export const updateCustomProduct = async (id, data) => {
   if (name !== undefined) product.name = name.trim();
   if (category !== undefined) product.category = category.trim();
   if (mainCategory !== undefined) product.mainCategory = mainCategory.trim();
+
+  // Ensure subcategory exists and is linked
+  const activeCat = product.category?.trim();
+  const activeMain = product.mainCategory?.trim() || 'games';
+  if (activeCat) {
+    let targetSub = await SubCategory.findOne({
+      name: { $regex: new RegExp(`^${activeCat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      mainCategory: activeMain,
+    });
+    if (!targetSub) {
+      targetSub = await SubCategory.create({
+        name: activeCat,
+        mainCategory: activeMain,
+        imageUrl: product.image?.trim() || '',
+        isVisible: true,
+        sortOrder: 0,
+      });
+    } else if (!targetSub.imageUrl && product.image?.trim()) {
+      targetSub.imageUrl = product.image.trim();
+      await targetSub.save();
+    }
+    product.subCategoryId = targetSub._id;
+    product.subCategoryName = targetSub.name;
+    product.subCategoryImage = targetSub.imageUrl || product.image;
+    product.category = targetSub.name;
+  }
   if (originalPrice !== undefined) product.originalPrice = Number(originalPrice);
   if (price !== undefined) {
     product.price = Number(price);
