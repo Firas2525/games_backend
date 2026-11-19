@@ -48,7 +48,7 @@ app.get('/', (req, res) => {
   return res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-// Dynamic Direct APK Download (Resolves MediaFire direct binary URL on the fly)
+// Dynamic Direct APK Download (Resolves MediaFire, Google Drive, Dropbox, or Direct APK on the fly)
 let cachedDirectUrl = null;
 let lastResolvedAt = 0;
 let lastSourceUrl = null;
@@ -59,44 +59,73 @@ app.get('/download', async (req, res) => {
     try {
       const { Settings } = await import('./modules/settings/settings.model.js');
       const settings = await Settings.findOne({ key: 'system_settings' }).lean();
-      if (settings?.appDownloadUrl) {
+      if (settings?.apkFileUrl && settings.apkFileUrl.trim().length > 0) {
+        sourceUrl = settings.apkFileUrl.trim();
+      } else if (settings?.appDownloadUrl && !settings.appDownloadUrl.includes('/download')) {
         sourceUrl = settings.appDownloadUrl.trim();
       }
     } catch (_) {}
 
-    // If sourceUrl is already a direct APK link, redirect directly
-    if (sourceUrl.toLowerCase().endsWith('.apk')) {
+    // Avoid self-redirect loop if sourceUrl accidentally points to this same endpoint
+    if (sourceUrl.includes('/download') && !sourceUrl.includes('mediafire') && !sourceUrl.includes('drive.google')) {
+      sourceUrl = 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file';
+    }
+
+    // 1. If sourceUrl is already a direct APK link, redirect directly
+    if (sourceUrl.toLowerCase().split('?')[0].endsWith('.apk')) {
       return res.redirect(sourceUrl);
     }
 
     const now = Date.now();
-    // Cache the resolved direct link for 20 minutes
+    // Cache the resolved direct link for 20 minutes (invalidated instantly if admin changes sourceUrl)
     if (cachedDirectUrl && sourceUrl === lastSourceUrl && now - lastResolvedAt < 20 * 60 * 1000) {
       return res.redirect(cachedDirectUrl);
     }
 
-    // Resolve MediaFire direct link
-    if (sourceUrl.includes('mediafire.com')) {
-      const mfResponse = await fetch(sourceUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        },
-      });
-      const html = await mfResponse.text();
-      const match = html.match(/href="(https:\/\/download[^"]+)"/i);
-      if (match && match[1]) {
-        cachedDirectUrl = match[1];
+    // 2. Google Drive Direct Resolver
+    if (sourceUrl.includes('drive.google.com')) {
+      const driveMatch =
+        sourceUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || sourceUrl.match(/id=([a-zA-Z0-9_-]+)/);
+      if (driveMatch && driveMatch[1]) {
+        const driveDirect = `https://drive.usercontent.google.com/download?id=${driveMatch[1]}&export=download&confirm=t`;
+        cachedDirectUrl = driveDirect;
         lastSourceUrl = sourceUrl;
         lastResolvedAt = now;
-        return res.redirect(cachedDirectUrl);
+        return res.redirect(driveDirect);
       }
     }
 
-    // Fallback: redirect to sourceUrl
+    // 3. Dropbox Direct Resolver
+    if (sourceUrl.includes('dropbox.com')) {
+      const dropboxDirect = sourceUrl.replace('dl=0', 'dl=1');
+      return res.redirect(dropboxDirect);
+    }
+
+    // 4. Resolve MediaFire direct binary download link
+    if (sourceUrl.includes('mediafire.com')) {
+      try {
+        const mfResponse = await fetch(sourceUrl, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          },
+        });
+        const html = await mfResponse.text();
+        const match =
+          html.match(/href="(https:\/\/download[^"]+)"/i) ||
+          html.match(/(https:\/\/download[0-9]*\.mediafire\.com\/[^\s"'>]+)/i);
+        if (match && match[1]) {
+          cachedDirectUrl = match[1];
+          lastSourceUrl = sourceUrl;
+          lastResolvedAt = now;
+          return res.redirect(cachedDirectUrl);
+        }
+      } catch (_) {}
+    }
+
+    // Fallback: redirect directly to sourceUrl
     return res.redirect(sourceUrl);
   } catch (err) {
-    return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM_Store.apk/file');
     return res.redirect('https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file');
   }
 });

@@ -114,6 +114,11 @@ const settingsSchema = new mongoose.Schema(
       default: 'يتوفر إصدار جديد يحتوي على تحسينات هامة وسرعة أكبر في تنفيذ الطلبات وإصلاحات عامة.',
       trim: true,
     },
+    apkFileUrl: {
+      type: String,
+      default: 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file',
+      trim: true,
+    },
     appDownloadUrl: {
       type: String,
       default: 'https://games-backend-c0h7.onrender.com/download',

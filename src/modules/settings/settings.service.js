@@ -216,6 +216,11 @@ export const getAppUpdateSettings = async (clientQuery = {}) => {
     'يتوفر إصدار جديد يحتوي على تحسينات هامة وسرعة أكبر في تنفيذ الطلبات وإصلاحات عامة.';
   const appDownloadUrl =
     settings.appDownloadUrl || 'https://games-backend-c0h7.onrender.com/download';
+  const apkFileUrl =
+    settings.apkFileUrl ||
+    (settings.appDownloadUrl && !settings.appDownloadUrl.includes('/download')
+      ? settings.appDownloadUrl
+      : 'https://www.mediafire.com/file/lunw62vyk7cay1r/SM+Store.apk/file');
 
   const clientVersion = clientQuery.currentVersion || clientQuery.version || '';
   const clientBuild = parseInt(clientQuery.currentBuildNumber || clientQuery.buildNumber, 10);
@@ -234,7 +239,9 @@ export const getAppUpdateSettings = async (clientQuery = {}) => {
     latestBuildNumber,
     updateTitle,
     updateNotes,
+    apkFileUrl,
     appDownloadUrl,
+    permanentDownloadUrl: 'https://games-backend-c0h7.onrender.com/download',
     updatedAt: settings.updatedAt,
   };
 };
@@ -245,6 +252,7 @@ export const updateAppUpdateSettings = async ({
   isForceUpdate,
   updateTitle,
   updateNotes,
+  apkFileUrl,
   appDownloadUrl,
 }) => {
   let settings = await Settings.findOne({ key: 'system_settings' });
@@ -257,6 +265,7 @@ export const updateAppUpdateSettings = async ({
   if (isForceUpdate !== undefined) settings.isForceUpdate = Boolean(isForceUpdate);
   if (updateTitle !== undefined) settings.updateTitle = String(updateTitle || '').trim();
   if (updateNotes !== undefined) settings.updateNotes = String(updateNotes || '').trim();
+  if (apkFileUrl !== undefined) settings.apkFileUrl = String(apkFileUrl || '').trim();
   if (appDownloadUrl !== undefined) settings.appDownloadUrl = String(appDownloadUrl || '').trim();
 
   await settings.save();
@@ -267,7 +276,9 @@ export const updateAppUpdateSettings = async ({
     isForceUpdate: Boolean(settings.isForceUpdate),
     updateTitle: settings.updateTitle,
     updateNotes: settings.updateNotes,
+    apkFileUrl: settings.apkFileUrl,
     appDownloadUrl: settings.appDownloadUrl,
+    permanentDownloadUrl: 'https://games-backend-c0h7.onrender.com/download',
     updatedAt: settings.updatedAt,
   };
 };
